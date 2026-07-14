@@ -140,6 +140,25 @@ class User(UserMixin, db.Model):
         elif access == 'backup':
             return self.has_backup_access()
 
+class Downloads(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title_id = db.Column(db.String, index=True)
+    app_id = db.Column(db.String, index=True)
+    app_version = db.Column(db.String)
+    app_type = db.Column(db.String)
+    search_query = db.Column(db.String)
+    torrent_hash = db.Column(db.String, index=True)
+    torrent_name = db.Column(db.String)
+    indexer = db.Column(db.String)
+    size = db.Column(db.Integer)
+    seeders = db.Column(db.Integer)
+    status = db.Column(db.String, default='queued')
+    error = db.Column(db.String)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    __table_args__ = (db.UniqueConstraint('app_id', 'app_version', name='uq_downloads_app_version'),)
+
 def init_db(app):
     with app.app_context():
         # Ensure foreign keys are enforced when the SQLite connection is opened
@@ -505,3 +524,54 @@ def increment_download_count_throttled(filepath, host):
         host: IP address (or identifier) of the requesting client.
     """
     increment_download_count(filepath)
+
+
+def get_download_by_app(app_id, app_version):
+    return Downloads.query.filter_by(app_id=app_id, app_version=str(app_version)).first()
+
+def get_download_by_id(download_id):
+    return Downloads.query.filter_by(id=download_id).first()
+
+def get_download_by_hash(torrent_hash):
+    return Downloads.query.filter_by(torrent_hash=torrent_hash).first()
+
+def add_download(**kwargs):
+    existing = get_download_by_app(kwargs.get('app_id'), kwargs.get('app_version'))
+    if existing:
+        return existing
+    download = Downloads(**kwargs)
+    db.session.add(download)
+    db.session.commit()
+    return download
+
+def update_download(download_id, **kwargs):
+    download = get_download_by_id(download_id)
+    if download:
+        for key, value in kwargs.items():
+            if hasattr(download, key) and value is not None:
+                setattr(download, key, value)
+        db.session.commit()
+    return download
+
+def update_download_by_hash(torrent_hash, **kwargs):
+    download = get_download_by_hash(torrent_hash)
+    if download:
+        for key, value in kwargs.items():
+            if hasattr(download, key) and value is not None:
+                setattr(download, key, value)
+        db.session.commit()
+    return download
+
+def get_all_downloads():
+    return Downloads.query.order_by(Downloads.created_at.desc()).all()
+
+def get_downloads_in_progress():
+    return Downloads.query.filter(Downloads.status.in_(['queued', 'downloading'])).all()
+
+def delete_download(download_id):
+    download = get_download_by_id(download_id)
+    if download:
+        db.session.delete(download)
+        db.session.commit()
+        return True
+    return False

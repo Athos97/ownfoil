@@ -21,7 +21,10 @@
                 {% endif %}
                 {% if current_user.is_admin or admin_account_created == false %}
                 <li class="nav-item">
-                    <a class="nav-link{% if title == 'Settings' %} active" aria-current="page"{% else %}"{% endif %}" href="/settings">Settings</a>
+                    <a class="nav-link{% if title == 'Settings' %} active" aria-current="page"{% else %}"{% endif %} href="/settings">Settings</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link{% if title == 'Downloads' %} active" aria-current="page"{% else %}"{% endif %} href="/downloads">Downloads</a>
                 </li>
                 {% endif %}
             </ul>

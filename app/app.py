@@ -19,6 +19,9 @@ import titles as titles_lib
 from utils import *
 from library import *
 import titledb
+import downloader as downloader_lib
+import jackett
+import qbittorrent
 import os
 from clients import CyberFoilClient, TinfoilClient, SphairaClient
 
@@ -45,6 +48,9 @@ def init():
     init_scheduler(app)
     scan_interval_str = app_settings.get('scheduler', {}).get('scan_interval', '12h')
     schedule_update_and_scan_job(app, scan_interval_str, run_first=True, run_once=True)
+    # Schedule the downloader job (does nothing if not enabled/configured)
+    downloader_interval_str = app_settings.get('downloader', {}).get('interval', '1h')
+    schedule_downloader_job(app, downloader_interval_str, run_first=False)
 
 os.makedirs(CONFIG_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -267,6 +273,11 @@ def setup_page():
         admin_account_created=admin_account_created()
     )
 
+@app.route('/downloads')
+@access_required('admin')
+def downloads_page():
+    return render_template('downloads.html', title='Downloads', admin_account_created=admin_account_created())
+
 @app.get('/api/settings')
 @access_required('admin')
 def get_settings_api():
@@ -278,6 +289,13 @@ def get_settings_api():
             if 'hauth' in client_settings:
                 # Replace hauth dict with empty dict to keep it private
                 settings['shop']['clients'][client_name]['hauth'] = {}
+    # Strip downloader secrets for privacy (don't send to client)
+    if settings.get('downloader', {}).get('jackett'):
+        if 'api_key' in settings['downloader']['jackett']:
+            settings['downloader']['jackett']['api_key'] = ''
+    if settings.get('downloader', {}).get('qbittorrent'):
+        if 'password' in settings['downloader']['qbittorrent']:
+            settings['downloader']['qbittorrent']['password'] = ''
     return jsonify(settings)
 
 @app.post('/api/settings/titles')
@@ -398,8 +416,88 @@ def set_scheduler_settings_api():
                 'success': False,
                 'errors': [{'path': 'scheduler', 'error': str(e)}]
             })
-
     return jsonify({'success': True, 'errors': []})
+
+@app.post('/api/settings/downloader')
+@access_required('admin')
+def set_downloader_settings_api():
+    data = request.json or {}
+    api_key = data.get('jackett', {}).get('api_key')
+    password = data.get('qbittorrent', {}).get('password')
+    # Empty secret fields mean "keep current value" (they were stripped on GET)
+    if api_key == '':
+        data['jackett'].pop('api_key', None)
+    if password == '':
+        data['qbittorrent'].pop('password', None)
+    set_downloader_settings(data)
+    reload_conf()
+
+    interval_str = data.get('interval')
+    if interval_str is not None:
+        is_valid, error_msg = validate_interval_string(interval_str)
+        if not is_valid:
+            return jsonify({
+                'success': False,
+                'errors': [{'path': 'downloader/interval', 'error': error_msg}]
+            })
+        try:
+            schedule_downloader_job(app, interval_str, run_first=False)
+        except Exception as e:
+            logger.error(f"Error updating downloader scheduler: {e}")
+            return jsonify({
+                'success': False,
+                'errors': [{'path': 'downloader', 'error': str(e)}]
+            })
+    return jsonify({'success': True, 'errors': []})
+
+@app.post('/api/downloader/test')
+@access_required('admin')
+def test_downloader_api():
+    reload_conf()
+    downloader_settings = app_settings.get('downloader', {}) or {}
+    jackett_ok, jackett_msg = jackett.test_connection(downloader_settings.get('jackett', {}) or {})
+    qbt_ok, qbt_msg = qbittorrent.test_connection(downloader_settings.get('qbittorrent', {}) or {})
+    return jsonify({
+        'jackett': {'success': jackett_ok, 'message': jackett_msg},
+        'qbittorrent': {'success': qbt_ok, 'message': qbt_msg},
+    })
+
+@app.post('/api/downloader/run')
+@access_required('admin')
+def run_downloader_api():
+    def _run():
+        with app.app_context():
+            downloader_lib.run_downloader_job()
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'success': True, 'message': 'Downloader job started.'})
+
+@app.get('/api/downloader/status')
+@access_required('admin')
+def downloader_status_api():
+    summary = downloader_lib.get_downloads_status()
+    counts = {'queued': 0, 'downloading': 0, 'completed': 0, 'failed': 0}
+    for d in summary:
+        st = d.get('status')
+        if st in counts:
+            counts[st] += 1
+    return jsonify({'downloads': summary, 'counts': counts})
+
+@app.post('/api/downloader/retry')
+@access_required('admin')
+def retry_download_api():
+    data = request.json or {}
+    download_id = data.get('id')
+    if download_id is None:
+        return jsonify({'success': False, 'error': 'Missing download id.'}), 400
+    reload_conf()
+    ok, msg = downloader_lib.retry_download(download_id, app_settings)
+    return jsonify({'success': ok, 'message': msg})
+
+@app.route('/api/downloader/<int:download_id>', methods=['DELETE'])
+@access_required('admin')
+def delete_download_api(download_id):
+    success = delete_download(download_id)
+    return jsonify({'success': success})
 
 @app.post('/api/upload')
 @access_required('admin')
@@ -581,6 +679,20 @@ def schedule_update_and_scan_job(app: Flask, interval_str: str, run_first: bool 
         func=update_and_scan_job,
         run_first=run_first,
         run_once=run_once
+    )
+
+def downloader_job():
+    """Fetch and enqueue missing content via Jackett + qBittorrent."""
+    with app.app_context():
+        downloader_lib.run_downloader_job()
+
+def schedule_downloader_job(app: Flask, interval_str: str, run_first: bool = False):
+    """Schedule or update the downloader job"""
+    app.scheduler.update_job_interval(
+        job_id='downloader',
+        interval_str=interval_str,
+        func=downloader_job,
+        run_first=run_first
     )
 
 

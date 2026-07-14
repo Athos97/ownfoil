@@ -66,6 +66,27 @@ DEFAULT_SETTINGS = {
     },
     "scheduler": {
         "scan_interval": "12h",
+    },
+    "downloader": {
+        "enabled": False,
+        "jackett": {
+            "url": "",
+            "api_key": "",
+        },
+        "qbittorrent": {
+            "url": "",
+            "username": "",
+            "password": "",
+            "category": "ownfoil",
+            "save_path": "/games",
+        },
+        "filters": {
+            "min_seeders": 3,
+            "preferred_ext": ["nsz", "nsp", "xcz", "xci"],
+            "max_size_gb": 0,
+            "indexers": [],
+        },
+        "interval": "1h",
     }
 }
 

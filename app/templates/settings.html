@@ -405,6 +405,117 @@
                         onClick='submitSchedulerSettings()'>Submit</button>
                 </div>
 
+                <hr class="hr-settings">
+                <h2 class="pb-2">Downloader</h2>
+                <p>Automatically download missing updates and DLCs via Jackett and qBittorrent. Files are saved
+                    into the library and detected automatically.</p>
+
+                <div class="mb-3 form-check">
+                    <input type="checkbox" class="form-check-input" id="downloaderEnabledCheck"
+                        aria-describedby="downloaderEnabledCheckHelp">
+                    <label class="form-check-label" for="downloaderEnabledCheck">Enable auto-download</label>
+                    <div id="downloaderEnabledCheckHelp" class="form-text">Periodically search Jackett for the latest
+                        missing update/DLC of each title and send it to qBittorrent.</div>
+                </div>
+
+                <h4 class="pt-3 pb-2">Jackett</h4>
+                <div class="row">
+                    <div class="col-6 mb-3">
+                        <label for="jackettUrlInput" class="form-label">URL:</label>
+                        <input type="text" class="form-control" id="jackettUrlInput"
+                            aria-describedby="jackettUrlHelp" placeholder="http://jackett:9117">
+                        <div id="jackettUrlHelp" class="form-text">Base URL of your Jackett instance.</div>
+                    </div>
+                    <div class="col-6 mb-3">
+                        <label for="jackettApiKeyInput" class="form-label">API Key:</label>
+                        <input type="password" class="form-control" id="jackettApiKeyInput"
+                            aria-describedby="jackettApiKeyHelp" placeholder="Leave empty to keep current">
+                        <div id="jackettApiKeyHelp" class="form-text">Find it in Jackett's top-right "API Key".</div>
+                    </div>
+                </div>
+
+                <h4 class="pt-3 pb-2">qBittorrent</h4>
+                <div class="row">
+                    <div class="col-6 mb-3">
+                        <label for="qbtUrlInput" class="form-label">URL:</label>
+                        <input type="text" class="form-control" id="qbtUrlInput"
+                            aria-describedby="qbtUrlHelp" placeholder="http://qbittorrent:8080">
+                        <div id="qbtUrlHelp" class="form-text">Base URL of the qBittorrent Web UI.</div>
+                    </div>
+                    <div class="col-6 mb-3">
+                        <label for="qbtUsernameInput" class="form-label">Username:</label>
+                        <input type="text" class="form-control" id="qbtUsernameInput"
+                            aria-describedby="qbtUsernameHelp" placeholder="admin">
+                    </div>
+                    <div class="col-6 mb-3">
+                        <label for="qbtPasswordInput" class="form-label">Password:</label>
+                        <input type="password" class="form-control" id="qbtPasswordInput"
+                            aria-describedby="qbtPasswordHelp" placeholder="Leave empty to keep current">
+                        <div id="qbtPasswordHelp" class="form-text">Web UI password.</div>
+                    </div>
+                    <div class="col-6 mb-3">
+                        <label for="qbtCategoryInput" class="form-label">Category:</label>
+                        <input type="text" class="form-control" id="qbtCategoryInput"
+                            aria-describedby="qbtCategoryHelp" placeholder="ownfoil">
+                        <div id="qbtCategoryHelp" class="form-text">qBittorrent category assigned to downloads.</div>
+                    </div>
+                    <div class="col-6 mb-3">
+                        <label for="qbtSavePathInput" class="form-label">Save path:</label>
+                        <input type="text" class="form-control" id="qbtSavePathInput"
+                            aria-describedby="qbtSavePathHelp" placeholder="/games">
+                        <div id="qbtSavePathHelp" class="form-text"><strong>Must point to the same host volume
+                            Ownfoil uses as its library</strong> (e.g. <code>/games</code>). This path is passed to
+                            qBittorrent as-is, so it must be valid from qBittorrent's perspective.</div>
+                    </div>
+                </div>
+
+                <h4 class="pt-3 pb-2">Search filters</h4>
+                <div class="row">
+                    <div class="col-4 mb-3">
+                        <label for="dlMinSeedersInput" class="form-label">Min seeders:</label>
+                        <input type="number" min="0" class="form-control" id="dlMinSeedersInput" placeholder="3">
+                    </div>
+                    <div class="col-4 mb-3">
+                        <label for="dlMaxSizeGbInput" class="form-label">Max size (GB):</label>
+                        <input type="number" min="0" step="0.1" class="form-control" id="dlMaxSizeGbInput"
+                            aria-describedby="dlMaxSizeGbHelp" placeholder="0">
+                        <div id="dlMaxSizeGbHelp" class="form-text">0 = no limit.</div>
+                    </div>
+                    <div class="col-4 mb-3">
+                        <label for="dlIntervalInput" class="form-label">Interval:</label>
+                        <input type="text" class="form-control" id="dlIntervalInput"
+                            aria-describedby="dlIntervalHelp" placeholder="1h">
+                        <div id="dlIntervalFeedback"></div>
+                        <div id="dlIntervalHelp" class="form-text">Same format as the scan interval. <code>0</code>
+                            to disable.</div>
+                    </div>
+                    <div class="col-6 mb-3">
+                        <label for="dlPreferredExtInput" class="form-label">Preferred extensions:</label>
+                        <input type="text" class="form-control" id="dlPreferredExtInput"
+                            aria-describedby="dlPreferredExtHelp" placeholder="nsz,nsp,xcz,xci">
+                        <div id="dlPreferredExtHelp" class="form-text">Comma-separated, ordered by preference
+                            (first = preferred).</div>
+                    </div>
+                    <div class="col-6 mb-3">
+                        <label for="dlIndexersInput" class="form-label">Indexers:</label>
+                        <input type="text" class="form-control" id="dlIndexersInput"
+                            aria-describedby="dlIndexersHelp" placeholder="">
+                        <div id="dlIndexersHelp" class="form-text">Comma-separated Jackett indexer IDs. Leave empty
+                            to use all (aggregated endpoint).</div>
+                    </div>
+                </div>
+
+                <div id="downloaderTestResult" class="mb-3"></div>
+
+                <div class="mb-3">
+                    <button type="button" id="testDownloaderBtn" class="btn btn-outline-info"
+                        onClick='testDownloaderConnection()'>Test connection</button>
+                    <button type="button" id="runDownloaderBtn" class="btn btn-outline-success"
+                        onClick='runDownloaderNow()'>Run now</button>
+                    <button type="button" id="submitDownloaderSettingsBtn" class="btn btn-primary"
+                        onClick='submitDownloaderSettings()'>Submit</button>
+                </div>
+
             </div>
         </div>
     </div>
@@ -1080,6 +1191,110 @@
         });
     }
 
+    function parseCsvList(value) {
+        if (!value) return [];
+        return value.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    }
+
+    function submitDownloaderSettings() {
+        $('#submitDownloaderSettingsBtn').prop('disabled', true);
+        const api_key = getInputVal("jackettApiKeyInput");
+        const password = getInputVal("qbtPasswordInput");
+        data = {
+            enabled: getCheckboxStatus("downloaderEnabledCheck"),
+            jackett: {
+                url: getInputVal("jackettUrlInput").trim(),
+            },
+            qbittorrent: {
+                url: getInputVal("qbtUrlInput").trim(),
+                username: getInputVal("qbtUsernameInput"),
+                category: getInputVal("qbtCategoryInput").trim(),
+                save_path: getInputVal("qbtSavePathInput").trim(),
+            },
+            filters: {
+                min_seeders: parseInt(getInputVal("dlMinSeedersInput") || '0', 10),
+                preferred_ext: parseCsvList(getInputVal("dlPreferredExtInput")),
+                max_size_gb: parseFloat(getInputVal("dlMaxSizeGbInput") || '0'),
+                indexers: parseCsvList(getInputVal("dlIndexersInput")),
+            },
+            interval: getInputVal("dlIntervalInput").trim(),
+        }
+        // Only send secrets if the user typed something
+        if (api_key) data['jackett']['api_key'] = api_key;
+        if (password) data['qbittorrent']['password'] = password;
+
+        $.ajax({
+            url: "/api/settings/downloader",
+            type: 'POST',
+            data: JSON.stringify(data),
+            contentType: "application/json",
+            success: function (result) {
+                if (!result['success']) {
+                    if (result['errors']) {
+                        result['errors'].forEach(error => {
+                            if (error['path'] === 'downloader/interval') {
+                                $('#dlIntervalFeedback').text(error['error']);
+                                $('#dlIntervalFeedback').addClass('invalid-feedback d-block');
+                                $("#dlIntervalInput").removeClass('is-valid').addClass('is-invalid');
+                            }
+                            console.log('Path:', error['path'], 'Error:', error['error']);
+                        });
+                    }
+                } else {
+                    $('#dlIntervalFeedback').text('').removeClass('invalid-feedback d-block');
+                    $("#dlIntervalInput").removeClass('is-invalid').addClass('is-valid');
+                }
+                $('#submitDownloaderSettingsBtn').prop('disabled', false);
+            }
+        });
+    }
+
+    function testDownloaderConnection() {
+        const $btn = $('#testDownloaderBtn');
+        const $res = $('#downloaderTestResult');
+        $btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Testing...');
+        $res.html('');
+        $.ajax({
+            url: "/api/downloader/test",
+            type: 'POST',
+            contentType: "application/json",
+            data: JSON.stringify({}),
+            success: function (result) {
+                const j = result['jackett'] || {};
+                const q = result['qbittorrent'] || {};
+                const jackettAlert = j.success
+                    ? `<div class="alert alert-success py-1 mb-1"><i class="bi bi-check-circle-fill"></i> Jackett: ${j.message}</div>`
+                    : `<div class="alert alert-danger py-1 mb-1"><i class="bi bi-x-circle-fill"></i> Jackett: ${j.message}</div>`;
+                const qbtAlert = q.success
+                    ? `<div class="alert alert-success py-1 mb-0"><i class="bi bi-check-circle-fill"></i> qBittorrent: ${q.message}</div>`
+                    : `<div class="alert alert-danger py-1 mb-0"><i class="bi bi-x-circle-fill"></i> qBittorrent: ${q.message}</div>`;
+                $res.html(jackettAlert + qbtAlert);
+            },
+            error: function () {
+                $res.html('<div class="alert alert-danger py-1 mb-0">Request failed.</div>');
+            }
+        }).always(function () {
+            $btn.prop('disabled', false).text('Test connection');
+        });
+    }
+
+    function runDownloaderNow() {
+        const $btn = $('#runDownloaderBtn');
+        $btn.prop('disabled', true);
+        $.ajax({
+            url: "/api/downloader/run",
+            type: 'POST',
+            contentType: "application/json",
+            data: JSON.stringify({}),
+            success: function (result) {
+                const cls = result['success'] ? 'alert-success' : 'alert-warning';
+                $('#downloaderTestResult').html(`<div class="alert ${cls} py-1 mb-0">${result['message']}</div>`);
+            }
+        }).always(function () {
+            $btn.prop('disabled', false);
+        });
+    }
+
     $(document).ready(function () {
         fillUserTable();
         fillLibraryTable();
@@ -1149,6 +1364,33 @@
             schedulerSettings = result['scheduler'];
             if (schedulerSettings && schedulerSettings['scan_interval'] !== undefined) {
                 setInputVal("scanIntervalInput", schedulerSettings['scan_interval']);
+            }
+
+            // Downloader settings (secrets come empty from the API)
+            downloaderSettings = result['downloader'];
+            if (downloaderSettings) {
+                $("#downloaderEnabledCheck").prop("checked", downloaderSettings['enabled'] === true);
+                if (downloaderSettings['jackett']) {
+                    setInputVal("jackettUrlInput", downloaderSettings['jackett']['url']);
+                }
+                setInputVal("jackettApiKeyInput", "");
+                if (downloaderSettings['qbittorrent']) {
+                    setInputVal("qbtUrlInput", downloaderSettings['qbittorrent']['url']);
+                    setInputVal("qbtUsernameInput", downloaderSettings['qbittorrent']['username']);
+                    setInputVal("qbtCategoryInput", downloaderSettings['qbittorrent']['category']);
+                    setInputVal("qbtSavePathInput", downloaderSettings['qbittorrent']['save_path']);
+                }
+                setInputVal("qbtPasswordInput", "");
+                if (downloaderSettings['filters']) {
+                    const f = downloaderSettings['filters'];
+                    setInputVal("dlMinSeedersInput", f['min_seeders']);
+                    setInputVal("dlMaxSizeGbInput", f['max_size_gb']);
+                    setInputVal("dlPreferredExtInput", (f['preferred_ext'] || []).join(','));
+                    setInputVal("dlIndexersInput", (f['indexers'] || []).join(','));
+                }
+                if (downloaderSettings['interval'] !== undefined) {
+                    setInputVal("dlIntervalInput", downloaderSettings['interval']);
+                }
             }
 
             // Shop settings

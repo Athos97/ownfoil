@@ -147,6 +147,23 @@
     let totalGames = 0;
     let cardSize = 3; // Default card size
     let currentView = 'card'; // Default view is 'card'
+    let activeDownloadTitleIds = new Set();
+    const isAdminUser = {% if current_user.is_authenticated and current_user.is_admin %}true{% else %}false{% endif %};
+
+    function fetchActiveDownloads() {
+        if (!isAdminUser) return Promise.resolve();
+        return new Promise((resolve) => {
+            $.getJSON("/api/downloader/status", function (data) {
+                activeDownloadTitleIds = new Set();
+                (data['downloads'] || []).forEach(function (d) {
+                    if (d.status === 'queued' || d.status === 'downloading') {
+                        if (d.title_id) activeDownloadTitleIds.add(d.title_id);
+                    }
+                });
+                if (games) renderGames();
+            }).always(function () { resolve(); });
+        });
+    }
 
     function fetchGames() {
         return new Promise((resolve, reject) => {
@@ -251,6 +268,16 @@
             if (game.has_all_dlcs !== undefined) {
                 const dlcBadge = $('<span class="badge rounded-pill game-tag"></span>').addClass(`text-bg-${game.has_all_dlcs ? 'success' : 'warning'}`).html('<i class="bi bi-box-seam-fill"></i>');
                 tagsContainer.append(dlcBadge);
+            }
+
+            if (activeDownloadTitleIds.has(game.title_id)) {
+                const dlBadge = $('<span class="badge rounded-pill game-tag"></span>')
+                    .addClass('text-bg-info')
+                    .attr('data-bs-toggle', 'tooltip')
+                    .attr('data-bs-placement', 'top')
+                    .attr('data-bs-title', 'Downloading...')
+                    .html('<span class="spinner-border spinner-border-sm me-1"></span><i class="bi bi-cloud-download"></i>');
+                tagsContainer.append(dlBadge);
             }
 
             cardOverlay.append(tagsContainer);
@@ -439,7 +466,13 @@
         // Fetch initial set of games and render
         fetchGames().then(() => {
             loadFiltersFromStorage();
+            fetchActiveDownloads();
         });
+
+        // Refresh the active-download indicator periodically
+        if (isAdminUser) {
+            setInterval(fetchActiveDownloads, 5000);
+        }
 
         // Event listeners for items per page dropdown
         $('.items-per-page').click(function () {

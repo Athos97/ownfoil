@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% include 'nav.html' %}
+<div class="container-fluid mt-3">
+    <div class="d-flex flex-wrap align-items-center justify-content-between mb-3">
+        <div>
+            <h2>Downloads</h2>
+            <p class="text-muted mb-0">Queue of missing content fetched from Jackett and sent to qBittorrent.</p>
+        </div>
+        <div class="d-flex align-items-center">
+            <div id="downloadsSummary" class="me-3"></div>
+            <button type="button" id="runDownloaderBtn" class="btn btn-outline-success"
+                onClick="runDownloaderNow()">Run scan + download now</button>
+            <button type="button" id="refreshBtn" class="btn btn-outline-secondary ms-2"
+                onClick="refreshDownloads()">Refresh</button>
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-hover align-middle">
+            <thead>
+                <tr>
+                    <th>Title</th>
+                    <th>Type</th>
+                    <th>Target version</th>
+                    <th>Torrent</th>
+                    <th>Indexer</th>
+                    <th>Size</th>
+                    <th>Seeders</th>
+                    <th>Status</th>
+                    <th>Started</th>
+                    <th class="text-end">Action</th>
+                </tr>
+            </thead>
+            <tbody id="downloadsBody"></tbody>
+        </table>
+    </div>
+    <div id="emptyState" class="text-center text-muted py-5">
+        No downloads yet. Configure the Downloader in Settings and run a scan.
+    </div>
+</div>
+
+<script>
+    let pollTimer = null;
+
+    function formatSize(bytes) {
+        if (!bytes) return '—';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let i = 0;
+        let val = bytes;
+        while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
+        return `${val.toFixed(1)} ${units[i]}`;
+    }
+
+    function formatTime(iso) {
+        if (!iso) return '—';
+        const d = new Date(iso);
+        if (isNaN(d)) return '—';
+        return d.toLocaleString();
+    }
+
+    function statusBadge(status) {
+        const map = {
+            'queued': { cls: 'text-bg-info', icon: 'bi-hourglass-split', label: 'Queued' },
+            'downloading': { cls: 'text-bg-warning', icon: 'bi-arrow-down-circle', label: 'Downloading' },
+            'completed': { cls: 'text-bg-success', icon: 'bi-check-circle-fill', label: 'Completed' },
+            'failed': { cls: 'text-bg-danger', icon: 'bi-x-circle-fill', label: 'Failed' },
+        };
+        const m = map[status] || { cls: 'text-bg-secondary', icon: 'bi-question-circle', label: status };
+        const spin = status === 'downloading' ? '<span class="spinner-border spinner-border-sm me-1"></span>' : `<i class="bi ${m.icon} me-1"></i>`;
+        return `<span class="badge rounded-pill ${m.cls}">${spin}${m.label}</span>`;
+    }
+
+    function typeBadge(app_type) {
+        const cls = app_type === 'UPDATE' ? 'text-bg-primary' : 'text-bg-secondary';
+        return `<span class="badge rounded-pill ${cls}">${app_type || '—'}</span>`;
+    }
+
+    function patchLevel(app_version) {
+        const v = parseInt(app_version, 10);
+        if (isNaN(v)) return app_version;
+        return `v${Math.floor(v / 65536)} (${v})`;
+    }
+
+    function renderDownloads(data) {
+        const $body = $('#downloadsBody');
+        $body.empty();
+        const downloads = data['downloads'] || [];
+        $('#emptyState').toggle(downloads.length === 0);
+
+        const counts = data['counts'] || {};
+        $('#downloadsSummary').html(
+            `<span class="badge text-bg-info me-1">Queued ${counts['queued'] || 0}</span>` +
+            `<span class="badge text-bg-warning me-1">Downloading ${counts['downloading'] || 0}</span>` +
+            `<span class="badge text-bg-success me-1">Completed ${counts['completed'] || 0}</span>` +
+            `<span class="badge text-bg-danger">Failed ${counts['failed'] || 0}</span>`
+        );
+
+        downloads.forEach(function (d) {
+            const canRetry = (d.status === 'failed');
+            const canDelete = (d.status === 'failed' || d.status === 'completed');
+            const actions =
+                `<button class="btn btn-sm btn-outline-primary ${canRetry ? '' : 'disabled'}" onclick="retryDownload(${d.id})"><i class="bi bi-arrow-repeat"></i></button> ` +
+                `<button class="btn btn-sm btn-outline-danger ${canDelete ? '' : 'disabled'}" onclick="removeDownload(${d.id})"><i class="bi bi-trash"></i></button>`;
+
+            const errorCell = d.status === 'failed' && d.error ? `<br><small class="text-danger">${$('<div>').text(d.error).html()}</small>` : '';
+            const row =
+                `<tr>` +
+                `<td>${$('<div>').text(d.torrent_name || d.title_id || '—').html()}<br><small class="text-muted">${$('<div>').text(d.title_id || '').html()}</small></td>` +
+                `<td>${typeBadge(d.app_type)}</td>` +
+                `<td>${patchLevel(d.app_version)}</td>` +
+                `<td><small>${$('<div>').text(d.torrent_name || '—').html()}</small></td>` +
+                `<td>${$('<div>').text(d.indexer || '—').html()}</td>` +
+                `<td>${formatSize(d.size)}</td>` +
+                `<td>${d.seeders != null ? d.seeders : '—'}</td>` +
+                `<td>${statusBadge(d.status)}${errorCell}</td>` +
+                `<td><small>${formatTime(d.created_at)}</small></td>` +
+                `<td class="text-end">${actions}</td>` +
+                `</tr>`;
+            $body.append(row);
+        });
+    }
+
+    function refreshDownloads() {
+        $.getJSON("/api/downloader/status", function (data) {
+            renderDownloads(data);
+        });
+    }
+
+    function retryDownload(id) {
+        $.ajax({
+            url: "/api/downloader/retry",
+            type: 'POST',
+            contentType: "application/json",
+            data: JSON.stringify({ id: id }),
+            success: function () { refreshDownloads(); }
+        });
+    }
+
+    function removeDownload(id) {
+        $.ajax({
+            url: `/api/downloader/${id}`,
+            type: 'DELETE',
+            success: function () { refreshDownloads(); }
+        });
+    }
+
+    function runDownloaderNow() {
+        const $btn = $('#runDownloaderBtn');
+        $btn.prop('disabled', true);
+        $.ajax({
+            url: "/api/downloader/run",
+            type: 'POST',
+            contentType: "application/json",
+            data: JSON.stringify({}),
+        }).always(function () {
+            $btn.prop('disabled', false);
+            setTimeout(refreshDownloads, 1500);
+        });
+    }
+
+    $(document).ready(function () {
+        refreshDownloads();
+        pollTimer = setInterval(refreshDownloads, 5000);
+    });
+</script>
+{% endblock %}

@@ -248,3 +248,17 @@ def set_scheduler_settings(data):
     with settings_lock:
         with open(CONFIG_FILE, 'w') as yaml_file:
             yaml.dump(settings, yaml_file)
+
+def set_downloader_settings(data):
+    settings = load_settings()
+    _deep_update(settings['downloader'], data)
+    with settings_lock:
+        with open(CONFIG_FILE, 'w') as yaml_file:
+            yaml.dump(settings, yaml_file)
+
+def _deep_update(target, data):
+    for key, value in data.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _deep_update(target[key], value)
+        else:
+            target[key] = value
