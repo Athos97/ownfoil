@@ -72,10 +72,22 @@ class QbittorrentClient:
                 headers={'Referer': self.base_url},
                 timeout=REQUEST_TIMEOUT,
             )
-            ok = r.status_code == 200 and 'ok' in r.text.strip().lower()
             info_hash = extract_info_hash(download_url)
+            ok = False
+            if r.status_code in (200, 202):
+                try:
+                    resp = r.json()
+                    if isinstance(resp, dict) and ('failure_count' in resp or 'pending_count' in resp):
+                        ok = int(resp.get('failure_count', 0)) == 0
+                        ids = resp.get('added_torrent_ids') or []
+                        if ids and not info_hash:
+                            info_hash = str(ids[0]).lower()
+                    else:
+                        ok = 'ok' in str(resp).lower()
+                except ValueError:
+                    ok = r.text.strip().lower() == 'ok.'
             if not ok:
-                return False, f'qBittorrent rejected the torrent: {r.text.strip()}', info_hash
+                return False, f'qBittorrent rejected the torrent: {r.text.strip()[:200]}', info_hash
             return True, 'Torrent added.', info_hash
         except Exception as e:
             return False, f'Error adding torrent: {e}', None
@@ -98,6 +110,16 @@ class QbittorrentClient:
         except Exception as e:
             logger.warning(f'qBittorrent get_torrents failed: {e}')
             return []
+
+    def find_hash_by_name(self, name, category=None):
+        if not name:
+            return None
+        needle = name.strip().lower()
+        for t in self.get_torrents(category=category):
+            cand = (t.get('name') or '').strip().lower()
+            if cand and (cand == needle or needle in cand or cand in needle):
+                return (t.get('hash') or '').lower() or None
+        return None
 
 
 def test_connection(qbt_settings):

@@ -23,7 +23,7 @@ def _norm(s):
 
 
 def _ext_of(title):
-    m = re.search(r'\.(nsp|nsz|xci|xcz)\b', (title or '').lower())
+    m = re.search(r'\b(nsp|nsz|xci|xcz)\b', (title or '').lower())
     return m.group(1) if m else None
 
 
@@ -104,12 +104,7 @@ def rebuild_target_from_download(d):
 
 
 def build_query(target):
-    name = (target.get('name') or target.get('title_id') or '').strip()
-    if target.get('app_type') == APP_TYPE_UPD:
-        return f'{name} update'
-    if target.get('app_type') == APP_TYPE_DLC:
-        return name
-    return name
+    return target.get('app_id') or target.get('name') or target.get('title_id')
 
 
 def rank_results(results, target, filters):
@@ -185,6 +180,7 @@ def download_target(target, settings):
         app_id=target.get('app_id'),
         app_version=str(target.get('app_version')),
         app_type=target.get('app_type'),
+        name=target.get('name'),
         search_query=query,
     )
 
@@ -211,6 +207,9 @@ def download_target(target, settings):
                      status='failed', error=add_err or 'qBittorrent rejected torrent')
         return False
 
+    if not info_hash:
+        info_hash = client.find_hash_by_name(best.get('title'), qbt_settings.get('category'))
+
     add_download(**common, torrent_hash=info_hash, torrent_name=best.get('title'),
                  indexer=best.get('indexer'), size=best.get('size'), seeders=best.get('seeders'),
                  status='downloading' if info_hash else 'queued')
@@ -225,10 +224,14 @@ def sync_downloads_status(settings):
     qbt_settings = settings.get('downloader', {}).get('qbittorrent', {}) or {}
     client = qbittorrent.QbittorrentClient(qbt_settings)
     qb_states = {}
+    qb_by_name = {}
     ok, _ = client.login()
     if ok:
         for t in client.get_torrents(category=qbt_settings.get('category')):
             qb_states[(t.get('hash') or '').lower()] = t
+            nm = (t.get('name') or '').strip().lower()
+            if nm:
+                qb_by_name[nm] = t
 
     for d in in_progress:
         if is_app_owned(d.app_id, d.app_version):
@@ -236,6 +239,11 @@ def sync_downloads_status(settings):
             continue
         h = (d.torrent_hash or '').lower()
         t = qb_states.get(h) if h else None
+        if not t and d.torrent_name:
+            resolved = qb_by_name.get((d.torrent_name or '').strip().lower())
+            if resolved and resolved.get('hash'):
+                update_download(d.id, torrent_hash=resolved['hash'].lower())
+                t = resolved
         if t:
             state = t.get('state') or ''
             if state in QB_ERROR_STATES:

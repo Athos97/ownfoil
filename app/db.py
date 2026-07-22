@@ -146,6 +146,7 @@ class Downloads(db.Model):
     app_id = db.Column(db.String, index=True)
     app_version = db.Column(db.String)
     app_type = db.Column(db.String)
+    name = db.Column(db.String)
     search_query = db.Column(db.String)
     torrent_hash = db.Column(db.String, index=True)
     torrent_name = db.Column(db.String)

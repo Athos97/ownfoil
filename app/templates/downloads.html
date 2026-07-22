@@ -107,7 +107,7 @@
             const errorCell = d.status === 'failed' && d.error ? `<br><small class="text-danger">${$('<div>').text(d.error).html()}</small>` : '';
             const row =
                 `<tr>` +
-                `<td>${$('<div>').text(d.torrent_name || d.title_id || '—').html()}<br><small class="text-muted">${$('<div>').text(d.title_id || '').html()}</small></td>` +
+                `<td>${$('<div>').text(d.name || d.search_query || d.torrent_name || d.title_id || '—').html()}<br><small class="text-muted">${$('<div>').text(d.app_id || d.title_id || '').html()}</small></td>` +
                 `<td>${typeBadge(d.app_type)}</td>` +
                 `<td>${patchLevel(d.app_version)}</td>` +
                 `<td><small>${$('<div>').text(d.torrent_name || '—').html()}</small></td>` +
