@@ -310,6 +310,37 @@ class TempFile(db.Model):
     filepath = db.Column(db.String, unique=True, nullable=False)
 
 
+class Download(db.Model):
+    """One update/DLC the downloader has picked a torrent for.
+
+    A row exists per (app_id, app_version) target — `status` tracks the torrent's
+    lifecycle (`queued`/`downloading`/`failed`) plus `completed`, which is set from
+    app ownership once the library watcher has identified the downloaded file.
+    """
+    __tablename__ = 'downloads'
+
+    id = db.Column(db.Integer, primary_key=True)
+    title_id = db.Column(db.String, index=True)
+    app_id = db.Column(db.String, index=True)
+    app_version = db.Column(db.String)
+    app_type = db.Column(db.String)
+    name = db.Column(db.String)
+    search_query = db.Column(db.String)
+    torrent_hash = db.Column(db.String, index=True)
+    torrent_name = db.Column(db.String)
+    indexer = db.Column(db.String)
+    size = db.Column(db.Integer)
+    seeders = db.Column(db.Integer)
+    status = db.Column(db.String, default='queued', server_default='queued')
+    error = db.Column(db.String)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.datetime.utcnow,
+                           onupdate=datetime.datetime.utcnow)
+
+    __table_args__ = (db.UniqueConstraint('app_id', 'app_version',
+                                          name='uq_downloads_app_version'),)
+
+
 def add_temp_file(filepath):
     stmt = insert(TempFile).values(filepath=filepath).on_conflict_do_nothing()
     db.session.execute(stmt)
@@ -689,3 +720,50 @@ def reset_files_organized():
     """Reset the organized flag on all files so the organizer re-evaluates them."""
     Files.query.update({Files.organized: False})
     db.session.commit()
+
+
+# --- Downloads ---
+
+def is_app_owned(app_id, app_version):
+    """Whether the library holds this (app_id, app_version) — how a download completes."""
+    app = get_app_by_id_and_version(app_id, str(app_version))
+    return bool(app and app.owned)
+
+def get_download_by_app(app_id, app_version):
+    return Download.query.filter_by(app_id=app_id, app_version=str(app_version)).first()
+
+def get_download_by_id(download_id):
+    return db.session.get(Download, download_id)
+
+def add_download(**kwargs):
+    """Insert a download row, or return the existing one for the same target."""
+    existing = get_download_by_app(kwargs.get('app_id'), kwargs.get('app_version'))
+    if existing:
+        return existing
+    download = Download(**kwargs)
+    db.session.add(download)
+    db.session.commit()
+    return download
+
+def update_download(download_id, **kwargs):
+    download = get_download_by_id(download_id)
+    if not download:
+        return
+    for key, value in kwargs.items():
+        if value is not None:
+            setattr(download, key, value)
+    db.session.commit()
+
+def get_downloads_in_progress():
+    return Download.query.filter(Download.status.in_(['queued', 'downloading'])).all()
+
+def get_all_downloads():
+    return Download.query.order_by(Download.created_at.desc()).all()
+
+def delete_download(download_id):
+    download = get_download_by_id(download_id)
+    if not download:
+        return False
+    db.session.delete(download)
+    db.session.commit()
+    return True

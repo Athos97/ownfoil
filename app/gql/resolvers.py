@@ -18,9 +18,10 @@ from .filters import (
 )
 from .selection import Selection
 from .types import (
-    App, AppConnection, AppTypeCount, AppVersion, File, FileConnection, Library,
-    LibraryStats, Ownership, SizedCountByKey, Task, TaskStatus, Title, TitleConnection,
-    TitledbDlc, TitledbVersion, VerificationStatusCount, Worker, decode_json_list,
+    App, AppConnection, AppTypeCount, AppVersion, Download, DownloadStatus, File,
+    FileConnection, Library, LibraryStats, Ownership, SizedCountByKey, Task,
+    TaskStatus, Title, TitleConnection, TitledbDlc, TitledbVersion,
+    VerificationStatusCount, Worker, decode_json_list,
 )
 
 
@@ -1172,3 +1173,58 @@ def resolve_file(file_pk: str, ctx: GraphQLContext, info) -> Optional[File]:
     conn = resolve_files(filter=None, page=1, page_size=1, ctx=ctx, info=info,
                          only_pk=file_pk)
     return conn.items[0] if conn.items else None
+
+
+# ------------- downloads -------------
+
+def _version_or_zero(value) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def resolve_downloads(*, status: Optional[DownloadStatus], limit: int,
+                      ctx: GraphQLContext, info) -> List[Download]:
+    """Download rows newest first, mirroring what the Downloads page lists."""
+    if not ctx.can_admin:
+        return []
+    limit = max(1, min(limit, 500))
+    params: dict = {"limit": limit}
+    where = ""
+    if status:
+        params["status"] = status.value
+        where = " WHERE status = :status"
+    rows = db.session.execute(text(f"""
+    SELECT id, title_id, app_id, app_version, app_type, name, search_query,
+           torrent_hash, torrent_name, indexer, size, seeders, status, error,
+           created_at, updated_at
+    FROM downloads{where}
+    ORDER BY created_at DESC, id DESC
+    LIMIT :limit
+    """), params).all()
+    out = []
+    for r in rows:
+        try:
+            app_type = AppType(r.app_type)
+        except ValueError:
+            app_type = AppType.UPDATE
+        out.append(Download(
+            id=strawberry.ID(str(r.id)),
+            title_id=r.title_id or "",
+            app_id=r.app_id or "",
+            app_version=_version_or_zero(r.app_version),
+            app_type=app_type,
+            name=r.name,
+            search_query=r.search_query,
+            torrent_hash=r.torrent_hash,
+            torrent_name=r.torrent_name,
+            indexer=r.indexer,
+            size=r.size,
+            seeders=r.seeders,
+            status=DownloadStatus(r.status or 'queued'),
+            error=r.error,
+            created_at=_iso(r.created_at),
+            updated_at=_iso(r.updated_at),
+        ))
+    return out

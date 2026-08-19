@@ -10,13 +10,13 @@ from .docs import arg as _arg, described, described_field
 from .filters import AppFilter, AppType, FileFilter, OrderBy, TitleFilter
 from .mutations import Mutation
 from .resolvers import (
-    resolve_app, resolve_apps, resolve_file, resolve_files, resolve_libraries,
-    resolve_stats, resolve_task, resolve_tasks, resolve_title, resolve_titles,
-    resolve_workers,
+    resolve_app, resolve_apps, resolve_downloads, resolve_file, resolve_files,
+    resolve_libraries, resolve_stats, resolve_task, resolve_tasks, resolve_title,
+    resolve_titles, resolve_workers,
 )
 from .types import (
-    App, AppConnection, File, FileConnection, Library, LibraryStats, Task, TaskStatus,
-    Title, TitleConnection, Worker,
+    App, AppConnection, Download, DownloadStatus, File, FileConnection, Library,
+    LibraryStats, Task, TaskStatus, Title, TitleConnection, Worker,
 )
 
 
@@ -205,6 +205,19 @@ class Query:
         running now. Admin only; empty for any other role, and empty in a process that
         does not own the pool."""
         return resolve_workers(ctx=info.context, info=info)
+
+    @described_field
+    def downloads(
+        self, info: Info,
+        status: Annotated[Optional[DownloadStatus], _arg(
+            "Restrict to downloads in one state. Omit for all of them.")] = None,
+        limit: Annotated[int, _arg(
+            "Maximum rows to return, clamped to 1-500.")] = 500,
+    ) -> List[Download]:
+        """The downloader's queue and history, newest first. Admin only; empty for
+        any other role. Each row is one (app id, version) update/DLC target the
+        downloader picked a torrent for."""
+        return resolve_downloads(status=status, limit=limit, ctx=info.context, info=info)
 
     @described_field
     def stats(self, info: Info) -> LibraryStats:

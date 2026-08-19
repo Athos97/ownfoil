@@ -20,7 +20,6 @@ from .filters import (
     AppFilter, AppType, FileFilter, VerificationStatus, match_app, match_file,
 )
 from .scalars import BigInt
-
 # Arguments shared by the nested list fields, annotated once so `Title.apps` and
 # `File.apps` describe them identically.
 NestedAppTypes = Annotated[Optional[List[AppType]], arg(
@@ -148,6 +147,65 @@ class Worker:
     current_task: Optional[Task] = desc(
         "The task this worker is executing right now, or null if it is idle.",
         default=None)
+
+
+@described(strawberry.enum)
+class DownloadStatus(Enum):
+    """Where a download stands. `completed` is reached through library ownership -
+    the file watcher identifying the downloaded content - not through qBittorrent
+    alone, so a finished torrent still reads `downloading` until the library has
+    actually ingested the file."""
+    QUEUED = strawberry.enum_value(
+        "queued", description="Torrent handed to qBittorrent, but no infohash is "
+                              "known for it yet.")
+    DOWNLOADING = strawberry.enum_value(
+        "downloading", description="Torrent located in qBittorrent in an active state.")
+    COMPLETED = strawberry.enum_value(
+        "completed", description="The library holds the target: the downloaded file "
+                                 "was identified and flipped the app to owned.")
+    FAILED = strawberry.enum_value(
+        "failed", description="No result matched, or qBittorrent rejected or errored "
+                              "the torrent. Cleared by `retryDownload` or deletion.")
+
+
+@described(strawberry.type)
+class Download:
+    """One update or DLC the downloader has picked a torrent for. One row per
+    (app id, version) target - retries replace the row rather than stacking.
+    The whole type is admin only, like everything downloader-shaped."""
+    id: strawberry.ID = desc("Primary key of the download row.")
+    title_id: str = desc("The 16-hex-digit id of the game the target belongs to.")
+    app_id: str = desc("The target's own application id - the `800` update id, or the "
+                       "DLC's own id.")
+    app_version: int = desc("The target's version, as Nintendo counts it. Stored as "
+                            "text in the database and cast on the way out; the patch "
+                            "level humans read is this divided by 65536.")
+    app_type: AppType = desc("What kind of content the target is - always UPDATE or "
+                             "DLC here, since bases are never download targets.")
+    name: Optional[str] = desc("Display name: the game's name for an update, the "
+                               "DLC's own name for a DLC. Null when titledb does not "
+                               "know either.", default=None)
+    search_query: Optional[str] = desc("The query that was sent to Jackett for this "
+                                       "target.", default=None)
+    torrent_hash: Optional[str] = desc("The chosen torrent's infohash, lowercase - "
+                                       "null while the row is `queued` with only a "
+                                       "name to match on.", default=None)
+    torrent_name: Optional[str] = desc("The Jackett result title that was picked.",
+                                       default=None)
+    indexer: Optional[str] = desc("The tracker the torrent came from, as Jackett "
+                                  "reports it.", default=None)
+    size: Optional[BigInt] = desc("The torrent's size in bytes. A 64-bit scalar, "
+                                  "because game files routinely exceed the 2^31 a "
+                                  "GraphQL `Int` can carry.", default=None)
+    seeders: Optional[int] = desc("How many seeders the result advertised when it was "
+                                  "picked.", default=None)
+    status: DownloadStatus = desc("Where the download stands.")
+    error: Optional[str] = desc("Why it failed, when it did. Null otherwise.",
+                                default=None)
+    created_at: Optional[str] = desc("When the target was first handed to "
+                                     "qBittorrent, ISO 8601.", default=None)
+    updated_at: Optional[str] = desc("When the row last changed status, ISO 8601.",
+                                     default=None)
 
 
 @described(strawberry.type)

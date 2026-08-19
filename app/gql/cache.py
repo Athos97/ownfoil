@@ -37,9 +37,14 @@ SELECT * FROM
           COUNT(hash_modified), COALESCE(SUM(hash_modified), 0)
      FROM files),
   (SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(SUM(completion_pct), 0),
-          COALESCE(SUM(worker_id), 0),
-          SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END)
-     FROM tasks)
+           COALESCE(SUM(worker_id), 0),
+           SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END)
+     FROM tasks),
+  (SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(SUM(size), 0),
+           SUM(CASE WHEN status = 'downloading' THEN 1 ELSE 0 END),
+           SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END),
+           SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)
+     FROM downloads)
 """
 
 

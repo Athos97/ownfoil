@@ -1,0 +1,260 @@
+{% extends "settings_layout.html" %}
+{% block panel %}
+<div class="settings-container container mt-3">
+
+    <div class="d-flex align-items-start">
+        <div>
+            <h2>Downloads</h2>
+            <p class="text-secondary">Updates and DLCs the downloader is fetching through
+                qBittorrent. A row completes when the library has identified the file.</p>
+        </div>
+        <div class="ms-auto">
+            <button type="button" id="runDownloaderBtn" class="btn btn-primary"
+                onClick="runDownloaderNow()">Run scan now</button>
+        </div>
+    </div>
+
+    <div id="downloadsSummary" class="mb-3"></div>
+
+    <div class="table-responsive">
+        <table class="table table-hover align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">Title</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Target version</th>
+                    <th scope="col">Torrent</th>
+                    <th scope="col">Indexer</th>
+                    <th scope="col">Size</th>
+                    <th scope="col">Seeders</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Started</th>
+                    <th scope="col"></th>
+                </tr>
+            </thead>
+            <tbody id="downloadsBody"></tbody>
+        </table>
+    </div>
+    <p id="emptyState" class="text-secondary fst-italic">No downloads yet. Configure the
+        Downloader in Settings and run a scan.</p>
+
+</div>
+{% endblock %}
+
+{% block panel_scripts %}
+<script src="{{ url_for('static', filename='js/realtime.js') }}"></script>
+<script src="{{ url_for('static', filename='js/format.js') }}"></script>
+<script>
+
+    const RETRY_MUTATION = `
+        mutation Retry($id: ID!) {
+            retryDownload(id: $id) { id status }
+        }`;
+
+    const DELETE_MUTATION = `
+        mutation Delete($id: ID!) {
+            deleteDownload(id: $id)
+        }`;
+
+    const RUN_MUTATION = `
+        mutation Run {
+            runDownloader { id status }
+        }`;
+
+    let downloads = {};   // id -> download
+    let renderQueued = false;
+
+    function scheduleRender() {
+        if (renderQueued) return;
+        renderQueued = true;
+        requestAnimationFrame(() => { renderQueued = false; render(); });
+    }
+
+    async function mutate(query, variables) {
+        const r = await fetch('/api/graphql', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify({query: query, variables: variables || {}}),
+        });
+        if (!r.ok) throw new Error(`GraphQL HTTP ${r.status}`);
+        const body = await r.json();
+        if (body.errors && body.errors.length) {
+            throw new Error('GraphQL errors: ' + JSON.stringify(body.errors));
+        }
+        return body.data;
+    }
+
+    async function retryDownload(id) {
+        $(`.dl-retry[data-id="${id}"]`).prop('disabled', true);
+        try {
+            await mutate(RETRY_MUTATION, {id: String(id)});
+        } catch (e) {
+            console.error(e);
+            $(`.dl-retry[data-id="${id}"]`).prop('disabled', false);
+        }
+    }
+
+    async function deleteDownload(id) {
+        $(`.dl-delete[data-id="${id}"]`).prop('disabled', true);
+        try {
+            if ((await mutate(DELETE_MUTATION, {id: String(id)})).deleteDownload) {
+                delete downloads[String(id)];
+                scheduleRender();
+            }
+        } catch (e) {
+            console.error(e);
+            $(`.dl-delete[data-id="${id}"]`).prop('disabled', false);
+        }
+    }
+
+    async function runDownloaderNow() {
+        $('#runDownloaderBtn').prop('disabled', true);
+        try {
+            await mutate(RUN_MUTATION);
+        } catch (e) {
+            console.error(e);
+        } finally {
+            $('#runDownloaderBtn').prop('disabled', false);
+        }
+    }
+
+    // --- Formatting ---
+
+    function patchLevel(version) {
+        return `v${Math.floor(version / 65536)} (${version})`;
+    }
+
+    function formatSize(bytes) {
+        return bytes ? formatBytes(bytes) : '—';
+    }
+
+    function statusBadge(d) {
+        const map = {
+            queued: 'text-bg-secondary',
+            downloading: 'text-bg-info',
+            completed: 'text-bg-success',
+            failed: 'text-bg-danger',
+        };
+        const spinner = d.status === 'downloading'
+            ? ' <span class="spinner-border spinner-border-sm" role="status"></span>' : '';
+        return `<span class="badge ${map[d.status] || 'text-bg-secondary'}">${d.status}${spinner}</span>`;
+    }
+
+    function esc(s) {
+        return String(s ?? '').replace(/[&<>"']/g,
+            c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+    }
+
+    // --- Rendering ---
+
+    function buildRow(d) {
+        const tr = document.createElement('tr');
+        tr.dataset.id = d.id;
+        tr.innerHTML = `
+            <td>
+                <div class="fw-semibold"></div>
+                <div class="text-secondary small"></div>
+            </td>
+            <td></td>
+            <td></td>
+            <td class="dl-torrent"></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td><div class="dl-status"></div><div class="text-danger small"></div></td>
+            <td class="text-secondary"></td>
+            <td class="text-end text-nowrap"></td>`;
+        return tr;
+    }
+
+    function updateRow(tr, d) {
+        const cells = tr.children;
+        const label = d.name || d.searchQuery || d.torrentName || d.titleId || d.appId;
+        cells[0].children[0].textContent = label;
+        cells[0].children[1].textContent = d.appId || d.titleId || '';
+        cells[1].innerHTML = d.appType === 'UPDATE'
+            ? '<span class="badge text-bg-primary">UPDATE</span>'
+            : '<span class="badge text-bg-secondary">DLC</span>';
+        cells[2].textContent = patchLevel(parseInt(d.appVersion) || 0);
+        cells[3].textContent = d.torrentName || '—';
+        cells[4].textContent = d.indexer || '—';
+        cells[5].textContent = formatSize(d.size);
+        cells[6].textContent = d.seeders ?? '—';
+        cells[7].querySelector('.dl-status').innerHTML = statusBadge(d);
+        cells[7].querySelector('.text-danger').textContent =
+            d.status === 'failed' ? (d.error || '') : '';
+        cells[8].textContent = d.createdAt
+            ? new Date(d.createdAt).toLocaleString() : '';
+
+        const canRetry = d.status === 'failed';
+        const canDelete = d.status === 'failed' || d.status === 'completed';
+        cells[9].innerHTML = `
+            <button type="button" class="icon-btn dl-retry" data-id="${d.id}" title="Retry"
+                ${canRetry ? '' : 'disabled'}>
+                <i class="bi bi-arrow-clockwise"></i>
+            </button>
+            <button type="button" class="icon-btn dl-delete" data-id="${d.id}" title="Remove"
+                ${canDelete ? '' : 'disabled'}>
+                <i class="bi bi-trash"></i>
+            </button>`;
+    }
+
+    function render() {
+        const body = document.getElementById('downloadsBody');
+        const list = Object.values(downloads).sort((a, b) => b.id - a.id);
+
+        const wanted = new Set(list.map(d => String(d.id)));
+        Array.from(body.children).forEach(tr => {
+            if (!wanted.has(tr.dataset.id)) tr.remove();
+        });
+        const existing = {};
+        Array.from(body.children).forEach(tr => { existing[tr.dataset.id] = tr; });
+
+        let cursor = body.firstChild;
+        list.forEach(d => {
+            let tr = existing[String(d.id)];
+            if (!tr) {
+                tr = buildRow(d);
+                tr.querySelector('.dl-retry').addEventListener('click', () => retryDownload(d.id));
+                tr.querySelector('.dl-delete').addEventListener('click', () => deleteDownload(d.id));
+            }
+            if (tr === cursor) cursor = cursor.nextSibling;
+            else body.insertBefore(tr, cursor);
+            updateRow(tr, d);
+        });
+
+        document.getElementById('emptyState').classList.toggle('d-none', list.length > 0);
+
+        const counts = {};
+        list.forEach(d => { counts[d.status] = (counts[d.status] || 0) + 1; });
+        const summary = document.getElementById('downloadsSummary');
+        summary.innerHTML = ['downloading', 'queued', 'completed', 'failed'].map(status => `
+            <span class="badge ${({
+                downloading: 'text-bg-info',
+                queued: 'text-bg-secondary',
+                completed: 'text-bg-success',
+                failed: 'text-bg-danger',
+            })[status]} me-1">${status}: ${counts[status] || 0}</span>`).join('');
+    }
+
+    // --- Wiring ---
+
+    const live = new Realtime(['downloads']);
+
+    live.on('downloads', (type, data) => {
+        if (type === 'snapshot') {
+            downloads = {};
+            data.forEach(d => { downloads[d.id] = d; });
+        } else if (type === 'remove') {
+            delete downloads[data.id];
+        } else {
+            downloads[data.id] = data;
+        }
+        scheduleRender();
+    });
+
+    live.start();
+
+</script>
+{% endblock %}

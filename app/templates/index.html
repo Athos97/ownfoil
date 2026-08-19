@@ -141,6 +141,9 @@
 </div>
 
 <script src="{{ url_for('static', filename='js/format.js') }}"></script>
+{% if current_user.is_authenticated and current_user.is_admin %}
+<script src="{{ url_for('static', filename='js/realtime.js') }}"></script>
+{% endif %}
 <script>
     // The grid is served page by page: every render is one GraphQL call for exactly the
     // items on screen. Filters, search and ordering are query arguments, so a page of
@@ -158,6 +161,11 @@
     let activeOwnershipFilter = "";
     let activeUpdateFilter = "";
     let activeCompletionFilter = "";
+
+    // Title/app ids with a download in flight, so cards can carry a live badge.
+    // Only maintained (and only used) when the viewer is an admin.
+    const activeDownloadIds = new Set();
+    let lastCardGames = [];
 
     const PLACEHOLDER_BANNER = '//placehold.it/400x200';
 
@@ -256,7 +264,8 @@
         if (isIcon) {
             renderIconView(data.apps.items);
         } else {
-            renderCardView(data.apps.items.map(cardModel));
+            lastCardGames = data.apps.items.map(cardModel);
+            renderCardView(lastCardGames);
         }
         updatePaginationControls(totalPages);
 
@@ -351,6 +360,7 @@
                 has_latest_version: ownership.haveBase && ownership.upToDate,
                 has_all_dlcs: ownership.complete,
                 version: versions,
+                dl_key: title.titleId,
             };
         }
 
@@ -366,6 +376,7 @@
             owned: app.owned,
             has_latest_version: ownedVersions.length > 0 && Math.max(...ownedVersions) >= highest,
             version: versions,
+            dl_key: app.appId,
         };
     }
 
@@ -427,6 +438,12 @@
             if (game.has_all_dlcs !== undefined) {
                 const dlcBadge = $('<span class="badge rounded-pill game-tag"></span>').addClass(`text-bg-${game.has_all_dlcs ? 'success' : 'warning'}`).html('<i class="bi bi-box-seam-fill"></i>');
                 tagsContainer.append(dlcBadge);
+            }
+
+            if (activeDownloadIds.has(game.dl_key)) {
+                const dlBadge = $('<span class="badge rounded-pill game-tag text-bg-info" title="Downloading..."></span>')
+                    .html('<span class="spinner-border spinner-border-sm" role="status"></span> <i class="bi bi-cloud-download"></i>');
+                tagsContainer.append(dlBadge);
             }
 
             cardOverlay.append(tagsContainer);
@@ -703,5 +720,35 @@
         });
 
     });
+
+    {% if current_user.is_authenticated and current_user.is_admin %}
+    // Live "Downloading..." badges: download rows stream over the realtime topic and
+    // the current card page is re-rendered from its cached models.
+    function refreshActiveDownloads() {
+        activeDownloadIds.clear();
+        Object.values(downloadsState).forEach(d => {
+            if (d.status === 'queued' || d.status === 'downloading') {
+                if (d.titleId) activeDownloadIds.add(d.titleId);
+                if (d.appId) activeDownloadIds.add(d.appId);
+            }
+        });
+        if (lastCardGames.length) renderCardView(lastCardGames);
+    }
+
+    let downloadsState = {};
+    const downloadsLive = new Realtime(['downloads']);
+    downloadsLive.on('downloads', (type, data) => {
+        if (type === 'snapshot') {
+            downloadsState = {};
+            data.forEach(d => { downloadsState[d.id] = d; });
+        } else if (type === 'remove') {
+            delete downloadsState[data.id];
+        } else {
+            downloadsState[data.id] = data;
+        }
+        refreshActiveDownloads();
+    });
+    downloadsLive.start();
+    {% endif %}
 </script>
 {% endblock %}

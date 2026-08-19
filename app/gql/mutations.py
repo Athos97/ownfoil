@@ -25,7 +25,7 @@ from constants import COMPRESS_EXT
 
 from .docs import described, described_mutation
 from .resolvers import resolve_task, resolve_title
-from .types import Task, Title
+from .types import AppType, Download, DownloadStatus, Task, Title
 
 
 class NotAuthorized(Exception):
@@ -236,3 +236,71 @@ class Mutation:
         _require_admin(info.context)
         ok, _err = titledb.store.delete_override(str(title_id))
         return bool(ok)
+
+    @described_mutation
+    def run_downloader(self, info: Info) -> Optional[Task]:
+        """Run a downloader pass now: sync download statuses against qBittorrent,
+        compute missing updates/DLCs, and queue a torrent for each. A no-op when the
+        downloader is not configured; progress and cancellation behave like any
+        other task."""
+        import tasks as tasks_mod
+        _require_admin(info.context)
+        task, _created = tasks_mod.enqueue_task('downloader_run', {})
+        return _task_by_id(task.id, info)
+
+    @described_mutation
+    def retry_download(
+        self, info: Info,
+        id: Annotated[strawberry.ID, strawberry.argument(
+            description="Primary key of the failed download to retry.")],
+    ) -> Optional[Download]:
+        """Re-search a failed download from scratch and hand the best new result to
+        qBittorrent. The old row is deleted and replaced, keeping one row per
+        (app id, version) target. Null when the row vanished mid-retry."""
+        import downloader as downloader_lib
+        from db import get_download_by_app, get_download_by_id
+        from settings import get_settings
+        _require_admin(info.context)
+        download = get_download_by_id(int(id))
+        if not download:
+            raise MutationFailed("Download not found")
+        app_id, app_version = download.app_id, str(download.app_version)
+        ok, _msg = downloader_lib.retry_download(int(id), get_settings())
+        if not ok:
+            raise MutationFailed("No matching torrent found on retry")
+        row = get_download_by_app(app_id, app_version)
+        if row is None:
+            return None
+        from .resolvers import _iso, _version_or_zero
+        return Download(
+            id=strawberry.ID(str(row.id)),
+            title_id=row.title_id or "",
+            app_id=row.app_id or "",
+            app_version=_version_or_zero(row.app_version),
+            app_type=AppType(row.app_type) if row.app_type in ('BASE', 'UPDATE', 'DLC')
+                     else AppType.UPDATE,
+            name=row.name,
+            search_query=row.search_query,
+            torrent_hash=row.torrent_hash,
+            torrent_name=row.torrent_name,
+            indexer=row.indexer,
+            size=row.size,
+            seeders=row.seeders,
+            status=DownloadStatus(row.status or 'queued'),
+            error=row.error,
+            created_at=_iso(row.created_at),
+            updated_at=_iso(row.updated_at),
+        )
+
+    @described_mutation
+    def delete_download(
+        self, info: Info,
+        id: Annotated[strawberry.ID, strawberry.argument(
+            description="Primary key of the download row to remove.")],
+    ) -> bool:
+        """Remove a download row from the queue. Only the row: qBittorrent keeps the
+        torrent and the disk keeps whatever it already fetched. False when there was
+        nothing to remove."""
+        from db import delete_download as db_delete_download
+        _require_admin(info.context)
+        return db_delete_download(int(id))

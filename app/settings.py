@@ -332,3 +332,16 @@ def set_scheduler_settings(data):
 def set_worker_settings(data):
     with settings_transaction() as settings:
         settings['worker'].update(data)
+
+def _deep_update(target, data):
+    """Recursively merge `data` into `target` dicts, in place."""
+    for key, value in data.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _deep_update(target[key], value)
+        else:
+            target[key] = value
+
+def set_downloader_settings(data):
+    """Deep-merge the downloader block so a partial save (secrets omitted) keeps the rest."""
+    with settings_transaction() as settings:
+        _deep_update(settings['downloader'], data)

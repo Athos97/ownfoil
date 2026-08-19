@@ -11,6 +11,7 @@ import titledb
 from containers import compression
 from containers import verification as verification_lib
 from constants import COMPRESS_EXT, DECOMPRESS_EXT
+import downloader as downloader_lib
 from db import (
     db, Task, Files, Apps, Libraries, get_library_id, get_library_path, get_library_file_paths,
     get_libraries, add_title_id_in_db, get_title_id_db_id, add_file_to_app,
@@ -33,6 +34,10 @@ logger = logging.getLogger('main')
 
 # How long to wait before retrying a titledb update that failed to reach the release
 TITLEDB_RETRY_DELAY = datetime.timedelta(hours=1)
+
+# Same idea for the downloader job: a failed run re-arms itself so one network blip
+# cannot kill the chain until the next restart.
+DOWNLOADER_RETRY_DELAY = datetime.timedelta(hours=1)
 
 # --- Task Registry ---
 TASK_REGISTRY = {}
@@ -142,6 +147,7 @@ TASK_DISPLAY = {
         f'Moved {os.path.basename(src_path)} to {os.path.basename(dest_path)}'),
     'handle_file_deleted': lambda filepath, **kw: f'Deleted {os.path.basename(filepath)}',
     'handle_dir_deleted': lambda dirpath, **kw: f'Deleted folder {os.path.basename(dirpath)}',
+    'downloader_run': lambda **kw: 'Download missing updates & DLC',
 }
 
 
@@ -591,6 +597,7 @@ def startup_task(**kwargs):
         # A retry is already scheduled; scanning must not be held hostage to the network
         logger.exception('titledb update failed at startup')
     scan_libraries_task()
+    arm_downloader_schedule()
 
 # --- Periodic tasks ---
 @register_task('update_titledb')
@@ -611,6 +618,34 @@ def update_titledb_task(**kwargs):
     delta = interval_string_to_timedelta(interval_str)
     if delta:
         update_scheduled_task('update_titledb', datetime.datetime.utcnow() + delta)
+
+
+def arm_downloader_schedule(settings=None):
+    """Create/refresh/delete the scheduled downloader row according to current settings.
+
+    The downloader is disabled by default, so unlike titledb there is no row until the
+    feature is configured - and disabling it removes the row rather than leaving a
+    periodic no-op behind.
+    """
+    settings = settings or get_settings()
+    delta = interval_string_to_timedelta(settings.get('downloader', {}).get('interval', '1h'))
+    run_after = None
+    if downloader_lib.is_configured(settings) and delta:
+        run_after = datetime.datetime.utcnow() + delta
+    update_scheduled_task('downloader_run', run_after)
+
+
+@register_task('downloader_run')
+def downloader_run_task(**kwargs):
+    """Check for missing updates/DLCs and download them, then re-arm the next run."""
+    settings = get_settings()
+    try:
+        downloader_lib.run_downloader_job(settings, progress=_task_progress(_current_task_id))
+    except Exception:
+        update_scheduled_task('downloader_run',
+                              datetime.datetime.utcnow() + DOWNLOADER_RETRY_DELAY)
+        raise
+    arm_downloader_schedule(settings)
 
 
 # --- Scan pipeline ---

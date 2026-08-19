@@ -560,6 +560,127 @@
                         onClick='submitWorkerSettings()'>Submit</button>
                 </div>
 
+                <hr class="hr-settings">
+                <h2 class="pb-2">Downloader</h2>
+                <p>Automatically download missing updates and DLCs: each run searches
+                    <a href="https://github.com/Jackett/Jackett" target="_blank" rel="noopener">Jackett</a>
+                    for the latest unowned version of every title, adds the best torrent to
+                    qBittorrent, and lets the library watcher pick the file up once it lands.</p>
+
+                <div class="mb-3 form-check">
+                    <input type="checkbox" class="form-check-input" id="downloaderEnabledCheck"
+                        aria-describedby="downloaderEnabledCheckHelp">
+                    <label class="form-check-label" for="downloaderEnabledCheck">Enable auto-download</label>
+                    <div id="downloaderEnabledCheckHelp" class="form-text">Runs periodically (see interval below) and
+                        only when Jackett and qBittorrent are reachable.</div>
+                </div>
+
+                <h4 class="pt-3 pb-2">Jackett</h4>
+                <div class="row mb-3">
+                    <div class="col-6">
+                        <label for="jackettUrlInput" class="form-label">Jackett URL:</label>
+                        <input type="text" class="form-control" id="jackettUrlInput" aria-describedby="jackettUrlHelp"
+                            placeholder="http://jackett:9117">
+                        <div id="jackettUrlHelp" class="form-text">Base URL of your Jackett instance.</div>
+                    </div>
+                    <div class="col-6">
+                        <label for="jackettApiKeyInput" class="form-label">API key:</label>
+                        <input type="password" class="form-control" id="jackettApiKeyInput"
+                            aria-describedby="jackettApiKeyHelp" placeholder="Leave empty to keep current">
+                        <div id="jackettApiKeyHelp" class="form-text">Jackett API key (Settings &rarr; API Key).
+                            Leave empty to keep the stored one.</div>
+                    </div>
+                </div>
+
+                <h4 class="pt-3 pb-2">qBittorrent</h4>
+                <div class="row mb-3">
+                    <div class="col-6">
+                        <label for="qbtUrlInput" class="form-label">qBittorrent WebUI URL:</label>
+                        <input type="text" class="form-control" id="qbtUrlInput" aria-describedby="qbtUrlHelp"
+                            placeholder="http://qbittorrent:8080">
+                        <div id="qbtUrlHelp" class="form-text">Base URL of the qBittorrent WebUI.</div>
+                    </div>
+                    <div class="col-3">
+                        <label for="qbtUsernameInput" class="form-label">Username:</label>
+                        <input type="text" class="form-control" id="qbtUsernameInput">
+                    </div>
+                    <div class="col-3">
+                        <label for="qbtPasswordInput" class="form-label">Password:</label>
+                        <input type="password" class="form-control" id="qbtPasswordInput"
+                            aria-describedby="qbtPasswordHelp" placeholder="Leave empty to keep current">
+                        <div id="qbtPasswordHelp" class="form-text">Leave empty to keep the stored one.</div>
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-6">
+                        <label for="qbtCategoryInput" class="form-label">Category:</label>
+                        <input type="text" class="form-control" id="qbtCategoryInput" aria-describedby="qbtCategoryHelp"
+                            placeholder="ownfoil">
+                        <div id="qbtCategoryHelp" class="form-text">qBittorrent category used to tag and find the
+                            torrents ownfoil adds.</div>
+                    </div>
+                    <div class="col-6">
+                        <label for="qbtSavePathInput" class="form-label">Save path:</label>
+                        <input type="text" class="form-control" id="qbtSavePathInput" aria-describedby="qbtSavePathHelp"
+                            placeholder="/games">
+                        <div id="qbtSavePathHelp" class="form-text"><strong>Must point to the same volume as a
+                            configured library path</strong>, as seen by qBittorrent (e.g. the same bind mount in
+                            Docker), so downloaded files land inside the library.</div>
+                    </div>
+                </div>
+
+                <h4 class="pt-3 pb-2">Search filters</h4>
+                <div class="row mb-3">
+                    <div class="col-6">
+                        <label for="dlMinSeedersInput" class="form-label">Minimum seeders:</label>
+                        <input type="number" class="form-control" id="dlMinSeedersInput" min="0" step="1">
+                        <div id="dlMinSeedersHelp" class="form-text">Results with fewer seeders are ignored.</div>
+                    </div>
+                    <div class="col-6">
+                        <label for="dlMaxSizeGbInput" class="form-label">Max size (GB):</label>
+                        <input type="number" class="form-control" id="dlMaxSizeGbInput" min="0" step="0.1">
+                        <div id="dlMaxSizeGbHelp" class="form-text">0 = no limit.</div>
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-6">
+                        <label for="dlPreferredExtInput" class="form-label">Preferred extensions:</label>
+                        <input type="text" class="form-control" id="dlPreferredExtInput"
+                            aria-describedby="dlPreferredExtHelp" placeholder="nsz, nsp, xcz, xci">
+                        <div id="dlPreferredExtHelp" class="form-text">Comma-separated, in order of preference. Only
+                            results with one of these extensions are considered.</div>
+                    </div>
+                    <div class="col-6">
+                        <label for="dlIndexersInput" class="form-label">Indexers:</label>
+                        <input type="text" class="form-control" id="dlIndexersInput" aria-describedby="dlIndexersHelp"
+                            placeholder="empty = all">
+                        <div id="dlIndexersHelp" class="form-text">Comma-separated Jackett indexer IDs. Empty searches
+                            the aggregate `all` endpoint.</div>
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-6">
+                        <label for="dlIntervalInput" class="form-label">Run interval:</label>
+                        <input type="text" class="form-control" id="dlIntervalInput"
+                            aria-describedby="dlIntervalHelp" placeholder="1h">
+                        <div id="dlIntervalFeedback"></div>
+                        <div id="dlIntervalHelp" class="form-text">Same format as the TitleDB interval
+                            (e.g. <code>30m</code>, <code>2h</code>, <code>1d</code>). <code>0</code> disables the
+                            periodic run.</div>
+                    </div>
+                </div>
+
+                <div id="downloaderTestResult"></div>
+
+                <div class="mb-3">
+                    <button type="button" id="testDownloaderBtn" class="btn btn-secondary"
+                        onClick='testDownloaderConnection()'>Test connection</button>
+                    <button type="button" id="runDownloaderNowBtn" class="btn btn-secondary"
+                        onClick='runDownloaderNow()'>Run now</button>
+                    <button type="button" id="submitDownloaderSettingsBtn" class="btn btn-primary"
+                        onClick='submitDownloaderSettings()'>Submit</button>
+                </div>
+
             </div>
 {% endblock %}
 
@@ -1340,6 +1461,103 @@
         });
     }
 
+    function parseCsvList(v) {
+        return (v || '').split(',').map(s => s.trim()).filter(s => s.length > 0);
+    }
+
+    function downloaderSettingsPayload() {
+        data = {
+            enabled: getCheckboxStatus("downloaderEnabledCheck"),
+            jackett: {
+                url: getInputVal("jackettUrlInput").trim()
+            },
+            qbittorrent: {
+                url: getInputVal("qbtUrlInput").trim(),
+                username: getInputVal("qbtUsernameInput").trim(),
+                category: getInputVal("qbtCategoryInput").trim(),
+                save_path: getInputVal("qbtSavePathInput").trim()
+            },
+            filters: {
+                min_seeders: parseInt(getInputVal("dlMinSeedersInput")) || 0,
+                preferred_ext: parseCsvList(getInputVal("dlPreferredExtInput")),
+                max_size_gb: parseFloat(getInputVal("dlMaxSizeGbInput")) || 0,
+                indexers: parseCsvList(getInputVal("dlIndexersInput"))
+            },
+            interval: getInputVal("dlIntervalInput").trim()
+        }
+        const apiKey = getInputVal("jackettApiKeyInput");
+        if (apiKey) { data['jackett']['api_key'] = apiKey; }
+        const qbtPassword = getInputVal("qbtPasswordInput");
+        if (qbtPassword) { data['qbittorrent']['password'] = qbtPassword; }
+        return data;
+    }
+
+    function submitDownloaderSettings() {
+        $('#submitDownloaderSettingsBtn').prop('disabled', true);
+        $.ajax({
+            url: "/api/settings/downloader",
+            type: 'POST',
+            data: JSON.stringify(downloaderSettingsPayload()),
+            contentType: "application/json",
+            success: function (result) {
+                if (!result['success']) {
+                    if (result['errors']) {
+                        result['errors'].forEach(error => {
+                            if (error['path'] === 'downloader/interval') {
+                                $('#dlIntervalFeedback').text(error['error']);
+                                $('#dlIntervalFeedback').addClass('invalid-feedback d-block');
+                                $("#dlIntervalInput").removeClass('is-valid');
+                                $("#dlIntervalInput").addClass('is-invalid');
+                            }
+                        });
+                    }
+                } else {
+                    $('#dlIntervalFeedback').text('');
+                    $('#dlIntervalFeedback').removeClass('invalid-feedback d-block');
+                    $("#dlIntervalInput").removeClass('is-invalid');
+                    $("#dlIntervalInput").addClass('is-valid');
+                }
+                $('#submitDownloaderSettingsBtn').prop('disabled', false);
+            }
+        });
+    }
+
+    function testDownloaderConnection() {
+        $('#testDownloaderBtn').prop('disabled', true);
+        $('#downloaderTestResult').empty();
+        $.ajax({
+            url: "/api/settings/downloader/test",
+            type: 'POST',
+            data: JSON.stringify(downloaderSettingsPayload()),
+            contentType: "application/json",
+            success: function (result) {
+                ['jackett', 'qbittorrent'].forEach(service => {
+                    const r = result[service];
+                    if (!r) { return; }
+                    const cls = r['success'] ? 'alert-success' : 'alert-danger';
+                    $('#downloaderTestResult').append(
+                        `<div class="alert ${cls} py-2 mb-2">${service}: ${r['message']}</div>`);
+                });
+                $('#testDownloaderBtn').prop('disabled', false);
+            },
+            error: function () {
+                $('#testDownloaderBtn').prop('disabled', false);
+            }
+        });
+    }
+
+    function runDownloaderNow() {
+        $('#runDownloaderNowBtn').prop('disabled', true);
+        fetch('/api/graphql', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ query: 'mutation { runDownloader { id status } }' })
+        }).finally(() => {
+            $('#runDownloaderNowBtn').prop('disabled', false);
+        });
+    }
+
     $(document).ready(function () {
         fillUserTable();
         fillLibraryTable();
@@ -1427,6 +1645,30 @@
             }
             if (workerSettings && workerSettings['group_limits'] && workerSettings['group_limits']['io'] !== undefined) {
                 $('#ioLimitInput').val(workerSettings['group_limits']['io']);
+            }
+
+            // Downloader settings
+            downloaderSettings = result['downloader'];
+            if (downloaderSettings) {
+                $("#downloaderEnabledCheck").prop("checked", downloaderSettings['enabled']);
+                if (downloaderSettings['jackett']) {
+                    setInputVal("jackettUrlInput", downloaderSettings['jackett']['url'] || '');
+                    setInputVal("jackettApiKeyInput", '');
+                }
+                if (downloaderSettings['qbittorrent']) {
+                    setInputVal("qbtUrlInput", downloaderSettings['qbittorrent']['url'] || '');
+                    setInputVal("qbtUsernameInput", downloaderSettings['qbittorrent']['username'] || '');
+                    setInputVal("qbtPasswordInput", '');
+                    setInputVal("qbtCategoryInput", downloaderSettings['qbittorrent']['category'] || '');
+                    setInputVal("qbtSavePathInput", downloaderSettings['qbittorrent']['save_path'] || '');
+                }
+                if (downloaderSettings['filters']) {
+                    setInputVal("dlMinSeedersInput", downloaderSettings['filters']['min_seeders']);
+                    setInputVal("dlPreferredExtInput", (downloaderSettings['filters']['preferred_ext'] || []).join(', '));
+                    setInputVal("dlMaxSizeGbInput", downloaderSettings['filters']['max_size_gb']);
+                    setInputVal("dlIndexersInput", (downloaderSettings['filters']['indexers'] || []).join(', '));
+                }
+                setInputVal("dlIntervalInput", downloaderSettings['interval'] || '1h');
             }
 
             // Shop settings
