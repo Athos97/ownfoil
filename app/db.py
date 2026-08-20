@@ -729,6 +729,10 @@ def is_app_owned(app_id, app_version):
     app = get_app_by_id_and_version(app_id, str(app_version))
     return bool(app and app.owned)
 
+def get_owned_app_versions(app_id):
+    """Every version of this app id the library already holds."""
+    return [a.app_version for a in Apps.query.filter_by(app_id=app_id, owned=True).all()]
+
 def get_download_by_app(app_id, app_version):
     return Download.query.filter_by(app_id=app_id, app_version=str(app_version)).first()
 

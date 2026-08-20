@@ -101,8 +101,35 @@ def build_query(target):
     return target.get('app_id') or target.get('name') or target.get('title_id')
 
 
-def rank_results(results, target, filters):
-    """Pick the best Jackett result for a target, or explain why none qualified."""
+def build_queries(target):
+    """Search queries to try, most specific first.
+
+    Scene releases on id-indexing trackers carry the app id; most trackers only
+    match on the game's name, so the app-id query alone starves them. Duplicates
+    removed, order preserved.
+    """
+    queries = []
+    app_id = target.get('app_id')
+    name = target.get('name')
+    title_id = target.get('title_id')
+    if app_id:
+        queries.append(app_id)
+    if name:
+        queries.append(name)
+        if target.get('app_type') == APP_TYPE_UPD:
+            queries.append(f'{name} update')
+    if title_id:
+        queries.append(title_id)
+    return list(dict.fromkeys(q for q in queries if q))
+
+
+def rank_results(results, target, filters, owned_versions=()):
+    """Pick the best Jackett result for a target, or explain why none qualified.
+
+    `owned_versions` are version strings the library already holds for this app id:
+    a result advertising one of them is a re-download of something owned, however
+    well it scores, so it is dropped outright.
+    """
     if not results:
         return None, 'No results from Jackett.'
 
@@ -117,6 +144,7 @@ def rank_results(results, target, filters):
     name_norm = _norm(target.get('name'))
     title_id_norm = _norm(target.get('title_id'))
     app_id_norm = _norm(target.get('app_id'))
+    owned_norms = [_norm(str(v)) for v in owned_versions if v is not None]
 
     candidates = []
     for r in results:
@@ -126,6 +154,8 @@ def rank_results(results, target, filters):
         if not ext or ext not in pref_index:
             continue
         if not any(tok and tok in tnorm for tok in (name_norm, title_id_norm, app_id_norm)):
+            continue
+        if any(ov and ov in tnorm for ov in owned_norms):
             continue
 
         seeders = int(r.get('seeders') or 0)
@@ -166,18 +196,23 @@ def download_target(target, settings):
     jackett_settings = downloader.get('jackett', {}) or {}
     qbt_settings = downloader.get('qbittorrent', {}) or {}
 
-    query = build_query(target)
-    results = jackett.search(jackett_settings, query, indexers=filters.get('indexers'))
-    best, reason = rank_results(results, target, filters)
-
     common = dict(
         title_id=target.get('title_id'),
         app_id=target.get('app_id'),
         app_version=str(target.get('app_version')),
         app_type=target.get('app_type'),
         name=target.get('name'),
-        search_query=query,
     )
+    owned_versions = get_owned_app_versions(target.get('app_id'))
+
+    best, reason, query = None, 'No results from Jackett.', None
+    for query in build_queries(target):
+        results = jackett.search(jackett_settings, query, indexers=filters.get('indexers'))
+        best, reason = rank_results(results, target, filters, owned_versions)
+        if best is not None:
+            break
+
+    common['search_query'] = query
 
     if best is None:
         add_download(**common, status='failed', error=reason or 'No matching results')
@@ -269,8 +304,16 @@ def run_downloader_job(settings=None, progress=None):
         logger.info(f'Downloader: {len(targets)} missing target(s).')
         added = 0
         for i, target in enumerate(targets):
-            if get_download_by_app(target.get('app_id'), str(target.get('app_version'))):
-                continue
+            row = get_download_by_app(target.get('app_id'), str(target.get('app_version')))
+            if row is not None:
+                if row.status != 'failed':
+                    continue
+                # A failed row would otherwise block the target forever: content
+                # appears on trackers (or FlareSolverr comes online) after the first
+                # miss, so every pass re-searches failed targets from scratch.
+                logger.info(f"[downloader] Retrying failed download for "
+                            f"{target.get('app_id')} v{target.get('app_version')}.")
+                delete_download(row.id)
             try:
                 if download_target(target, settings):
                     added += 1

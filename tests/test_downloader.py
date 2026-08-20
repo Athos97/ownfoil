@@ -98,6 +98,16 @@ def test_rank_respects_max_size(library):
     assert best is None
 
 
+def test_rank_skips_already_owned_versions(library):
+    """A result advertising a version the library holds is a re-download, however
+    well it scores - even the exact-version bonus must not resurrect it."""
+    owned = result('Some Game [0100ABCDEFDEF800][v196608].nsz', seeders=50)
+    other = result('Some Game [0100ABCDEFDEF800] Bundle.nsp', seeders=5)
+    best, _ = downloader_lib.rank_results(
+        [owned, other], TARGET, FILTERS, owned_versions=('196608', '65536'))
+    assert best is other
+
+
 # --- Targets ---
 
 def test_get_missing_targets_picks_latest_unowned(library, monkeypatch):
@@ -210,3 +220,86 @@ def test_sync_marks_failed_on_error_state(library, monkeypatch):
     row = db.session.get(Download, d.id)
     assert row.status == 'failed'
     assert 'missingFiles' in row.error
+
+
+# --- Job orchestration ---
+
+class FakeQbt:
+    def __init__(self, settings):
+        pass
+
+    def login(self):
+        return True, ''
+
+    def add_torrent(self, url, save_path=None, category=None):
+        return True, 'ok', 'c' * 40
+
+    def find_hash_by_name(self, name, category=None):
+        return None
+
+    def get_torrents(self, hashes=None, category=None):
+        return []
+
+
+def make_job(library, monkeypatch, search_results):
+    """A run_downloader_job with Jackett/qBittorrent faked and the queries captured."""
+    import jackett as jackett_mod
+    calls = {'queries': []}
+
+    def fake_search(jackett_settings, query, indexers=None):
+        calls['queries'].append(query)
+        return search_results.get(query, [])
+
+    monkeypatch.setattr(downloader_lib.jackett, 'search', fake_search)
+    monkeypatch.setattr(downloader_lib.qbittorrent, 'QbittorrentClient', FakeQbt)
+    monkeypatch.setattr(downloader_lib, 'is_configured', lambda s: True)
+    settings = {'downloader': {'filters': dict(FILTERS), 'qbittorrent': {}}}
+    return settings, calls
+
+
+def test_job_downloads_via_name_fallback(library, monkeypatch):
+    """App-id query starves on name-only trackers; the pass must fall through to
+    the game-name query and pick the torrent from there."""
+    monkeypatch.setattr(downloader_lib.titles_lib, 'get_game_info',
+                        lambda tid: {'name': 'Some Game'})
+    magnet = 'magnet:?xt=urn:btih:' + 'c' * 40
+    settings, calls = make_job(library, monkeypatch, {
+        'Some Game': [{'title': 'Some Game [0100ABCDEFDEF800].nsp',
+                       'download_url': magnet, 'seeders': 9, 'size': 1024 ** 3}],
+    })
+
+    downloader_lib.run_downloader_job(settings)
+
+    assert '0100ABCDEFDEF800' in calls['queries'], "app id tried first"
+    assert 'Some Game' in calls['queries'], "name fallback tried"
+    rows = {d.app_id: d for d in Download.query.all()}
+    assert rows['0100ABCDEFDEF800'].status == 'downloading'
+    assert rows['0100ABCDEFDEF800'].search_query == 'Some Game'
+
+
+def test_job_retries_failed_rows_and_skips_active(library, monkeypatch):
+    """A failed row is re-searched on the next pass; an active one is left alone."""
+    monkeypatch.setattr(downloader_lib.titles_lib, 'get_game_info',
+                        lambda tid: {'name': 'Some Game'})
+    settings, calls = make_job(library, monkeypatch, {
+        'Some Game': [{'title': 'Some Game [0100ABCDEFDEF800].nsp',
+                       'download_url': 'magnet:?xt=urn:btih:' + 'c' * 40,
+                       'seeders': 9, 'size': 1024 ** 3}],
+    })
+    magnet = 'magnet:?xt=urn:btih:' + 'd' * 40
+    dl = downloader_lib.add_download(
+        title_id='0100ABCDEFDEF000', app_id='0100ABCDEFDEF800',
+        app_version='196608', app_type='UPDATE', name='Some Game',
+        status='failed', error='No results from Jackett.')
+    active = downloader_lib.add_download(
+        title_id='0100ABCDEFDEF000', app_id='0100ABCDEFDEF100',
+        app_version='0', app_type='DLC', name='DLC', status='downloading')
+
+    downloader_lib.run_downloader_job(settings)
+
+    row = Download.query.filter_by(app_id='0100ABCDEFDEF800').one()
+    assert row.status == 'downloading', "the failed row was retried into a torrent"
+    assert row.id != dl.id, "retry replaced the row rather than reusing it"
+    assert db.session.get(Download, active.id).status == 'downloading'
+    assert '0100ABCDEFDEF100' not in [d.search_query for d in Download.query.all()], \
+        "an in-progress row is not re-searched"
