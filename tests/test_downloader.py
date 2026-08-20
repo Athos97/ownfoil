@@ -232,6 +232,8 @@ class FakeQbt:
         return True, ''
 
     def add_torrent(self, url, save_path=None, category=None):
+        self.added_urls = getattr(self, 'added_urls', [])
+        self.added_urls.append(url)
         return True, 'ok', 'c' * 40
 
     def find_hash_by_name(self, name, category=None):
@@ -245,15 +247,18 @@ def make_job(library, monkeypatch, search_results):
     """A run_downloader_job with Jackett/qBittorrent faked and the queries captured."""
     import jackett as jackett_mod
     calls = {'queries': []}
+    fake_qbt = FakeQbt(dict())
 
     def fake_search(jackett_settings, query, indexers=None):
         calls['queries'].append(query)
         return search_results.get(query, [])
 
     monkeypatch.setattr(downloader_lib.jackett, 'search', fake_search)
-    monkeypatch.setattr(downloader_lib.qbittorrent, 'QbittorrentClient', FakeQbt)
+    monkeypatch.setattr(downloader_lib.qbittorrent, 'QbittorrentClient',
+                        lambda settings: fake_qbt)
     monkeypatch.setattr(downloader_lib, 'is_configured', lambda s: True)
     settings = {'downloader': {'filters': dict(FILTERS), 'qbittorrent': {}}}
+    calls['qbt'] = fake_qbt
     return settings, calls
 
 
@@ -303,3 +308,25 @@ def test_job_retries_failed_rows_and_skips_active(library, monkeypatch):
     assert db.session.get(Download, active.id).status == 'downloading'
     assert '0100ABCDEFDEF100' not in [d.search_query for d in Download.query.all()], \
         "an in-progress row is not re-searched"
+
+
+def test_job_adds_a_bundle_torrent_only_once(library, monkeypatch):
+    """A bundle torrent satisfies several targets; qBittorrent must be asked once,
+    with every row sharing the hash."""
+    monkeypatch.setattr(downloader_lib.titles_lib, 'get_game_info',
+                        lambda tid: {'name': 'Some Game'})
+    magnet = 'magnet:?xt=urn:btih:' + 'c' * 40
+    bundle = [{'title': 'Some Game [0100ABCDEFDEF000][v3+DLC].xci',
+               'download_url': magnet, 'seeders': 9, 'size': 1024 ** 3}]
+    settings, calls = make_job(library, monkeypatch, {
+        '0100ABCDEFDEF800': bundle,
+        '0100ABCDEFDEF100': [],
+        'Some Game': bundle,
+    })
+
+    downloader_lib.run_downloader_job(settings)
+
+    assert len(calls['qbt'].added_urls) == 1, "one add for the shared torrent"
+    rows = Download.query.filter(Download.status == 'downloading').all()
+    assert len(rows) >= 2, "both targets resolved by the one torrent"
+    assert {r.torrent_hash for r in rows} == {'c' * 40}

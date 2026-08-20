@@ -190,7 +190,14 @@ def rank_results(results, target, filters, owned_versions=()):
     return candidates[0][1], None
 
 
-def download_target(target, settings):
+def download_target(target, settings, added_cache=None):
+    """Search, rank and hand one target's torrent to qBittorrent.
+
+    `added_cache` (url -> info_hash, shared across one pass) lets several targets
+    satisfied by the same bundle torrent reuse a single add: qBittorrent would
+    deduplicate them anyway, but each repeated add re-downloads the .torrent from
+    Jackett and burns an API call.
+    """
     downloader = settings.get('downloader', {})
     filters = downloader.get('filters', {}) or {}
     jackett_settings = downloader.get('jackett', {}) or {}
@@ -219,26 +226,33 @@ def download_target(target, settings):
         logger.info(f"[downloader] No match for {target.get('app_id')} v{target.get('app_version')}: {reason}")
         return False
 
-    client = qbittorrent.QbittorrentClient(qbt_settings)
-    ok, login_err = client.login()
-    if not ok:
-        logger.error(f"[downloader] qBittorrent login failed: {login_err}")
-        add_download(**common, status='failed', error=f'qBittorrent: {login_err}')
-        return False
+    url = best['download_url']
+    if added_cache is not None and url in added_cache:
+        ok, add_err, info_hash = True, None, added_cache[url]
+        logger.info(f"[downloader] Torrent already added this pass, reusing: {best.get('title')}")
+    else:
+        client = qbittorrent.QbittorrentClient(qbt_settings)
+        ok, login_err = client.login()
+        if not ok:
+            logger.error(f"[downloader] qBittorrent login failed: {login_err}")
+            add_download(**common, status='failed', error=f'qBittorrent: {login_err}')
+            return False
 
-    ok, add_err, info_hash = client.add_torrent(
-        best['download_url'],
-        save_path=qbt_settings.get('save_path') or None,
-        category=qbt_settings.get('category') or None,
-    )
-    if not ok:
-        add_download(**common, torrent_name=best.get('title'), indexer=best.get('indexer'),
-                     size=best.get('size'), seeders=best.get('seeders'),
-                     status='failed', error=add_err or 'qBittorrent rejected torrent')
-        return False
+        ok, add_err, info_hash = client.add_torrent(
+            url,
+            save_path=qbt_settings.get('save_path') or None,
+            category=qbt_settings.get('category') or None,
+        )
+        if not ok:
+            add_download(**common, torrent_name=best.get('title'), indexer=best.get('indexer'),
+                         size=best.get('size'), seeders=best.get('seeders'),
+                         status='failed', error=add_err or 'qBittorrent rejected torrent')
+            return False
 
-    if not info_hash:
-        info_hash = client.find_hash_by_name(best.get('title'), qbt_settings.get('category'))
+        if not info_hash:
+            info_hash = client.find_hash_by_name(best.get('title'), qbt_settings.get('category'))
+        if added_cache is not None:
+            added_cache[url] = info_hash
 
     add_download(**common, torrent_hash=info_hash, torrent_name=best.get('title'),
                  indexer=best.get('indexer'), size=best.get('size'), seeders=best.get('seeders'),
@@ -303,6 +317,7 @@ def run_downloader_job(settings=None, progress=None):
         targets = get_missing_targets()
         logger.info(f'Downloader: {len(targets)} missing target(s).')
         added = 0
+        added_cache = {}  # download url -> info_hash, so a bundle torrent is added once
         for i, target in enumerate(targets):
             row = get_download_by_app(target.get('app_id'), str(target.get('app_version')))
             if row is not None:
@@ -315,14 +330,15 @@ def run_downloader_job(settings=None, progress=None):
                             f"{target.get('app_id')} v{target.get('app_version')}.")
                 delete_download(row.id)
             try:
-                if download_target(target, settings):
+                if download_target(target, settings, added_cache):
                     added += 1
             except Exception as e:
                 logger.error(f"[downloader] Error processing {target.get('app_id')}: {e}")
             if progress:
                 progress(int((i + 1) * 100 / len(targets)))
         sync_downloads_status(settings)
-        logger.info(f'Downloader job done. Added {added} torrent(s).')
+        logger.info(f'Downloader job done. Added {len(added_cache)} torrent(s) '
+                    f'covering {added} target(s).')
     except Exception as e:
         logger.error(f'Downloader job failed: {e}')
 
