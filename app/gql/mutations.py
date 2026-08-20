@@ -242,10 +242,13 @@ class Mutation:
         """Run a downloader pass now: sync download statuses against qBittorrent,
         compute missing updates/DLCs, and queue a torrent for each. A no-op when the
         downloader is not configured; progress and cancellation behave like any
-        other task."""
+        other task. Runs independently of the periodic schedule - it does not reset
+        or wait for the next scheduled pass."""
         import tasks as tasks_mod
         _require_admin(info.context)
-        task, _created = tasks_mod.enqueue_task('downloader_run', {})
+        # Distinct input from the scheduled row ({}), or the dedup in enqueue_task
+        # would return that deferred row instead of starting work now.
+        task, _created = tasks_mod.enqueue_task('downloader_run', {'manual': True})
         return _task_by_id(task.id, info)
 
     @described_mutation

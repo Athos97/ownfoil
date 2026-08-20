@@ -37,6 +37,22 @@ def test_run_downloader_enqueues_the_task(library, monkeypatch):
     assert body['data']['runDownloader'] == {'taskName': 'downloader_run', 'status': 'PENDING'}
 
 
+def test_run_downloader_does_not_wait_for_the_scheduled_row(library, monkeypatch):
+    """A scheduled pass is pending with run_after 2h out; 'Run now' must not dedup
+    onto that deferred row, or the button quietly does nothing for two hours."""
+    import datetime
+    from tasks import update_scheduled_task
+    update_scheduled_task('downloader_run', datetime.datetime.utcnow() + datetime.timedelta(hours=2))
+
+    body = run(library, 'mutation { runDownloader { taskName status } }')
+    task = body['data']['runDownloader']
+    assert task['taskName'] == 'downloader_run'
+
+    from db import Task
+    manual = Task.query.filter_by(task_name='downloader_run', run_after=None).all()
+    assert len(manual) == 1, "the manual run is its own immediate row"
+
+
 def test_downloads_query_lists_rows_newest_first(library):
     db.session.add(Download(title_id='0100000000010000', app_id='0100000000010800',
                             app_version='65536', app_type='UPDATE', name='A',
