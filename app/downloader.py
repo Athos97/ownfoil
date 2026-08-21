@@ -570,7 +570,9 @@ def prepare_ghosteshop_targets(settings=None):
         if d.source == SOURCE_GHOSTESHOP and d.status == 'queued':
             targets.append({'app_id': d.app_id,
                             'app_version': str(d.app_version),
-                            'name': d.name or d.app_id})
+                            'name': d.name or d.app_id,
+                            'title_id': d.title_id,
+                            'app_type': d.app_type})
     # Then the computed missing updates/DLCs.
     for target in get_missing_targets():
         app_id = target.get('app_id')
@@ -587,7 +589,9 @@ def prepare_ghosteshop_targets(settings=None):
             logger.info(f'[ghosteshop] Retrying failed download for {app_id} v{ver}.')
             delete_download(row.id)
         targets.append({'app_id': app_id, 'app_version': ver,
-                        'name': target.get('name') or app_id})
+                        'name': target.get('name') or app_id,
+                        'title_id': target.get('title_id'),
+                        'app_type': target.get('app_type')})
 
     seen = set()
     out = []
@@ -600,14 +604,31 @@ def prepare_ghosteshop_targets(settings=None):
     return out
 
 
-def download_ghosteshop_row(app_id, app_version, settings=None):
-    """Download one downloads row via Ghost eShop - the body of the per-file io
-    task. The download row is the source of truth: a vanished or foreign-lane
-    row is a no-op, an owned target flips to completed."""
+def download_ghosteshop_row(app_id, app_version, name=None, title_id=None,
+                            app_type=None, settings=None):
+    """Download one target via Ghost eShop - the body of the per-file io task.
+
+    The downloads row drives the flow: a foreign-lane row is a no-op, an owned
+    target flips to completed, and a computed missing target that has no row
+    yet gets one here (only Add Content queues rows upfront)."""
     settings = settings or get_settings()
     row = get_download_by_app(app_id, str(app_version))
-    if row is None or (row.source or SOURCE_TORRENTS) != SOURCE_GHOSTESHOP:
-        return False  # row deleted or claimed elsewhere - nothing to do
+    if row is not None and (row.source or SOURCE_TORRENTS) != SOURCE_GHOSTESHOP:
+        return False  # claimed by the other lane - nothing to do
+    if row is None:
+        # Computed missing target: infer the family fields when the pass did
+        # not hand them over (e.g. a directly enqueued task).
+        if not title_id or not app_type:
+            suffix = (app_id or '')[-3:]
+            app_type = (APP_TYPE_BASE if suffix == '000'
+                        else APP_TYPE_UPD if suffix == '800' else APP_TYPE_DLC)
+            base = app_id[:-3]
+            title_id = (base + '000' if app_type != APP_TYPE_DLC else
+                        f'{int(base, 16) - 1:013X}000')
+        row = add_download(title_id=title_id, app_id=app_id,
+                           app_version=str(app_version), app_type=app_type,
+                           name=name or app_id, source=SOURCE_GHOSTESHOP,
+                           status='downloading', progress=0)
     if is_app_owned(app_id, app_version):
         update_download(row.id, status='completed', error=None, progress=100)
         return True

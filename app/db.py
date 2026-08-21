@@ -790,6 +790,29 @@ def is_app_owned(app_id, app_version):
     app = get_app_by_id_and_version(app_id, str(app_version))
     return bool(app and app.owned)
 
+
+def complete_downloads_for_apps(app_versions):
+    """Flip download rows to completed for content the library just identified.
+
+    The downloader's completion signal is ownership, but ownership only lands
+    when the watcher identifies the file - after the transfer already finished.
+    Called from the identification path, this closes the loop immediately
+    instead of waiting for the next downloader sync (which for a scheduled
+    Ghost eShop pass can be a day away)."""
+    flipped = 0
+    for app_id, version in app_versions:
+        rows = Download.query.filter_by(app_id=app_id,
+                                        app_version=str(version)).all()
+        for row in rows:
+            if row.status != 'completed':
+                row.status = 'completed'
+                row.error = None
+                row.progress = 100
+                flipped += 1
+    if flipped:
+        db.session.commit()
+    return flipped
+
 def get_owned_app_versions(app_id):
     """Every version of this app id the library already holds."""
     return [a.app_version for a in Apps.query.filter_by(app_id=app_id, owned=True).all()]

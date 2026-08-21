@@ -20,7 +20,7 @@ from db import (
     add_temp_file, remove_temp_file, claim_temp_file, get_temp_file_paths, purge_temp_files,
     set_library_scan_time, remove_missing_files_from_db,
     remove_file_from_apps, reset_file_identification, reset_file_verification, create_file,
-    verification_status,
+    verification_status, complete_downloads_for_apps,
 )
 from settings import get_settings
 import settings as settings_mod
@@ -707,7 +707,7 @@ def ghosteshop_download_task(app_id, app_version, name=None, **kwargs):
     (visible on the Downloads page) rather than raising - a missing catalog
     entry is an expected outcome, not a task crash."""
     settings = get_settings()
-    downloader_lib.download_ghosteshop_row(app_id, str(app_version), settings)
+    downloader_lib.download_ghosteshop_row(app_id, str(app_version), settings=settings)
 
 
 # --- Scan pipeline ---
@@ -850,6 +850,11 @@ def _identify(file, mgmt):
         file.nb_content = nb_content
         file.identified = True
         identified_title_ids = title_ids
+        # Content the downloader fetched completes the moment the library holds
+        # it - not at the next downloader sync, which for a scheduled Ghost
+        # eShop pass can be a day away.
+        complete_downloads_for_apps(
+            [(c["app_id"], c["version"]) for c in file_contents])
     else:
         logger.warning(f"Error identifying file {file.filename}: {error}")
         file.identification_error = error

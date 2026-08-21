@@ -243,3 +243,50 @@ def test_parent_task_enqueues_one_child_per_target(library, portal, tmp_path, mo
     child_input = json.loads(children[0].input_json)
     assert child_input['app_id'] == ZELDA_UPD_TID
     assert child_input['app_version'] == '1114112'
+
+
+def test_child_creates_row_for_computed_missing_target(library, portal, tmp_path, monkeypatch):
+    """A computed missing target arrives at the io task with no downloads row
+    (only Add Content queues rows upfront); the task must create it, not no-op."""
+    monkeypatch.setattr(downloader_lib.titles_lib, 'get_game_info',
+                        lambda tid: {'name': 'Zelda BOTW'})
+    settings = settings_with(str(tmp_path), ghost_settings(portal))
+    ok = downloader_lib.download_ghosteshop_row(
+        ZELDA_UPD_TID, '1114112', name='Zelda BOTW',
+        title_id=ZELDA_TID, app_type='UPDATE', settings=settings)
+
+    assert ok
+    row = Download.query.filter_by(app_id=ZELDA_UPD_TID).one()
+    assert row.source == 'ghosteshop'
+    assert row.status == 'downloading'
+    assert row.progress == 100
+    assert (tmp_path / 'Zelda BOTW' / ZELDA_UPD_NAME).is_file()
+
+
+def test_child_infers_family_fields_without_them(library, portal, tmp_path, monkeypatch):
+    """Directly enqueued tasks may not carry title_id/app_type; DLC ids derive
+    their base title by the same rule the filename parser uses."""
+    monkeypatch.setattr(downloader_lib.titles_lib, 'get_game_info',
+                        lambda tid: {'name': 'Death Howl'})
+    settings = settings_with(str(tmp_path), ghost_settings(portal))
+    downloader_lib.download_ghosteshop_row(
+        '0100CF70241E8800', '131072', name='Death Howl update', settings=settings)
+    row = Download.query.filter_by(app_id='0100CF70241E8800').one()
+    assert row.title_id == '0100CF70241E8000'
+    assert row.app_type == 'UPDATE'
+
+
+def test_identification_completes_download_rows(library, portal, tmp_path):
+    """The watcher identifying a fetched file is what completes its download
+    row - immediately, not at the next downloader sync."""
+    from db import complete_downloads_for_apps
+    row = downloader_lib.add_download(
+        title_id=ZELDA_TID, app_id=ZELDA_UPD_TID, app_version='1114112',
+        app_type='UPDATE', name='Zelda', source='ghosteshop',
+        status='downloading', progress=100)
+
+    flipped = complete_downloads_for_apps([(ZELDA_UPD_TID, '1114112'),
+                                           ('0100FF00FF00F800', '65536')])
+    assert flipped == 1
+    assert row.status == 'completed'
+    assert row.error is None
