@@ -119,12 +119,14 @@ def get_missing_targets():
 
 
 def rebuild_target_from_download(d):
-    name = None
     if d.app_type == APP_TYPE_UPD:
         name = (titles_lib.get_game_info(d.title_id) or {}).get('name')
     else:
         name = (titles_lib.get_game_info(d.app_id) or {}).get('name')
-    name = name or d.title_id
+    if not name or name == 'Unrecognized':
+        # Titledb does not know it: the row's display name (the game's title
+        # for Add Content picks) names the folder better than the placeholder.
+        name = d.name or d.title_id
     return {
         'title_id': d.title_id,
         'app_id': d.app_id,
@@ -327,8 +329,12 @@ def _ghost_destination(entry, target, settings):
         (settings.get('library', {}).get('management', {})
          .get('organizer', {}) or {}).get('windows_compatible'))
 
-    base_name = (titles_lib.get_game_info(target.get('title_id')) or {}).get('name') \
-        or target.get('name') or target.get('title_id') or 'unknown'
+    info = titles_lib.get_game_info(target.get('title_id')) or {}
+    base_name = info.get('name')
+    if not base_name or base_name == 'Unrecognized':
+        # Not in titledb: the queue row's display name (the game's title for
+        # Add Content picks) beats dumping the file into an Unrecognized folder.
+        base_name = target.get('name') or target.get('title_id') or 'unknown'
     game_folder = trim_name(sanitize_filename(base_name, windows_compatible),
                             MAX_NAME_WINDOWS)
     filename = sanitize_filename(entry.name or f"{entry.tid}.nsp", windows_compatible)

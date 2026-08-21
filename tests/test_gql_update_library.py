@@ -1,5 +1,7 @@
 """GraphQL surface for the Update Library / Add Content pages and the stats
 unidentified-files detail: query shape, admin gating, queue semantics."""
+import json
+
 import pytest
 
 import db as db_mod
@@ -103,11 +105,19 @@ def test_queue_downloads_creates_one_row_per_target(library):
     assert row.source == 'ghosteshop'
     assert row.app_type == 'UPDATE'
 
-    # Re-queueing the same target is a no-op, not a second row.
+    # Queueing means downloading: a manual Ghost eShop pass starts right away,
+    # not at the next scheduled run (which can be a day out).
+    from db import Task
+    passes = Task.query.filter_by(task_name='downloader_ghosteshop_run').all()
+    assert len(passes) == 1
+    assert json.loads(passes[0].input_json) == {'manual': True}
+
+    # Re-queueing the same target is a no-op, not a second row or a second pass.
     resp = library.test_client().post("/api/graphql", json={
         'query': QUEUE, 'variables': {'entries': [ENTRY]}})
     assert resp.get_json()['data']['queueGhosteshopDownloads'] == 0
     assert Download.query.filter_by(app_id='01007EF00011E800').count() == 1
+    assert Task.query.filter_by(task_name='downloader_ghosteshop_run').count() == 1
 
 
 def test_queue_skips_owned_targets(library):

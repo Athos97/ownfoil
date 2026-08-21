@@ -290,3 +290,21 @@ def test_identification_completes_download_rows(library, portal, tmp_path):
     assert flipped == 1
     assert row.status == 'completed'
     assert row.error is None
+
+
+def test_destination_falls_back_to_row_name_for_unknown_titles(library, monkeypatch):
+    """A game titledb does not know must not land in an 'Unrecognized' folder:
+    the queue row's display name (the game title for Add Content picks) names
+    the destination folder instead."""
+    from pathlib import Path
+    monkeypatch.setattr(downloader_lib, 'get_library_paths', lambda: ['/games'])
+    monkeypatch.setattr(downloader_lib.titles_lib, 'get_game_info',
+                        lambda tid: {'name': 'Unrecognized'})
+    entry = CatalogEntry(name='Galactic Wars [010000201E22E000][v0]',
+                         tid='010000201E22E000', category='BASE', version=0, size=1)
+    target = {'title_id': '010000201E22E000', 'name': 'Galactic Wars: Defend Your Star Worlds'}
+    dest = downloader_lib._ghost_destination(
+        entry, target, {'downloader': {'ghosteshop': {}},
+                        'library': {'management': {'organizer': {}}}})
+    parts = Path(dest).parts
+    assert parts[-2] == 'Galactic Wars: Defend Your Star Worlds', parts

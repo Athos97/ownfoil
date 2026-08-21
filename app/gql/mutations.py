@@ -314,9 +314,11 @@ class Mutation:
                         "type, unlike the periodic scan that only looks for missing "
                         "updates/DLCs.")],
     ) -> int:
-        """Queue catalog entries for the next Ghost eShop pass (or a manual run).
+        """Queue catalog entries for Ghost eShop and start a pass right away.
+
         Returns the number of rows now queued - entries already owned or already
         queued are skipped, and one row per (app id, version) target is kept."""
+        import tasks as tasks_mod
         import downloader as downloader_lib
         from db import get_download_by_app, is_app_owned
         _require_admin(info.context)
@@ -331,6 +333,11 @@ class Mutation:
                 app_version=e.app_version, app_type=e.app_type.value,
                 name=e.name)
             queued += 1
+        if queued:
+            # Queueing means "download this": kick a manual pass now rather than
+            # waiting for the scheduled one (which can be a day out). Distinct
+            # input from the scheduled row so enqueue dedup doesn't defer it.
+            tasks_mod.enqueue_task('downloader_ghosteshop_run', {'manual': True})
         return queued
 
     @described_mutation

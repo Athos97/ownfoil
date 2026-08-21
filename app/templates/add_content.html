@@ -261,8 +261,8 @@
                             <tbody>${rows}</tbody>
                         </table>
                     </div>
-                    <p class="text-secondary small mb-0">Queued items download on the next
-                        Ghost eShop pass - or run it now from Update Library.</p>
+                    <p class="text-secondary small mb-0">Queued items start downloading
+                        immediately - follow them on the Downloads page.</p>
                 </div>
             </div>`;
         pane.querySelector('.card-title').textContent = currentGame.title;
@@ -284,14 +284,14 @@
                 appId: e.tid,
                 appVersion: e.version,
                 appType: e.category,
-                name: e.name,
+                name: currentGame.title,   // display name / folder name for titledb-unknown games
                 fileName: e.name,
             }));
         if (!entries.length) return;
         document.getElementById('queueSelectedBtn').disabled = true;
         try {
             const data = await mutate(QUEUE_MUTATION, {entries: entries});
-            toast(`Queued ${data.queueGhosteshopDownloads} item(s) for Ghost eShop`);
+            toast(`Queued ${data.queueGhosteshopDownloads} item(s) - downloading now`);
             loadGhostGame(currentGame.baseTid);  // refresh owned/new badges
         } catch (e) {
             console.error(e);
