@@ -8,6 +8,7 @@ from typing import Tuple, Optional, Dict, Any
 from functools import wraps
 from db import get_filtered_files
 from auth import basic_auth
+import activity
 import logging
 
 logger = logging.getLogger('main')
@@ -55,6 +56,10 @@ class BaseClient(ABC):
                 self.log_info(f"Basic authentication successful for user: {request.user.user}")
             else:
                 self.log_warning(f"Authentication failed: {request.basic_auth_error}")
+
+            # Audit the visit (throttled per user/device inside) - after basic auth
+            # so the event carries who it was.
+            activity.record_shop_connect(request, self.CLIENT_NAME)
 
             # Client-specific authentication
             request.client_auth_success, request.client_auth_error, client_auth_data = self._client_authenticate(request)

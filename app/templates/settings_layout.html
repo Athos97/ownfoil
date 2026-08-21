@@ -32,6 +32,11 @@
                     </a>
                 </li>
                 <li class="nav-item">
+                    <a class="nav-link{% if request.path.startswith('/admin/activity') %} active{% endif %}" href="/admin/activity">
+                        Activity
+                    </a>
+                </li>
+                <li class="nav-item">
                     <a class="nav-link{% if request.path.startswith('/admin/stats') %} active{% endif %}" href="/admin/stats">
                         Stats
                     </a>

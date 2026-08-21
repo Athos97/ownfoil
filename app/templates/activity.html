@@ -1,0 +1,152 @@
+{% extends "settings_layout.html" %}
+{% block panel %}
+<div class="settings-container container mt-3">
+
+    <div class="d-flex align-items-start">
+        <div>
+            <h2>Activity</h2>
+            <p class="text-secondary">Who connects, who downloads what, and web logins -
+                the newest {{ max_events }} events, live.</p>
+        </div>
+        <div class="ms-auto d-flex gap-2 align-items-center">
+            <select id="kindFilter" class="form-select form-select-sm" style="width: auto;">
+                <option value="">All events</option>
+                <option value="shop_connect">Shop connections</option>
+                <option value="download">Downloads</option>
+                <option value="login">Logins</option>
+                <option value="login_failed">Failed logins</option>
+            </select>
+            <span id="liveDot" class="badge text-bg-success">live</span>
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">When</th>
+                    <th scope="col">What</th>
+                    <th scope="col">User</th>
+                    <th scope="col">Client</th>
+                    <th scope="col">Device</th>
+                    <th scope="col">Detail</th>
+                    <th scope="col">From</th>
+                </tr>
+            </thead>
+            <tbody id="activityBody"></tbody>
+        </table>
+    </div>
+    <p id="activityEmpty" class="text-secondary fst-italic">Nothing yet - events appear
+        here as users connect, download and log in.</p>
+
+</div>
+{% endblock %}
+
+{% block panel_scripts %}
+<script src="{{ url_for('static', filename='js/realtime.js') }}"></script>
+<script src="{{ url_for('static', filename='js/format.js') }}"></script>
+<script>
+
+    let events = {};       // id -> event
+    let renderQueued = false;
+
+    function scheduleRender() {
+        if (renderQueued) return;
+        renderQueued = true;
+        requestAnimationFrame(() => { renderQueued = false; render(); });
+    }
+
+    function esc(s) {
+        return String(s ?? '').replace(/[&<>"']/g,
+            c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+    }
+
+    const KIND_META = {
+        shop_connect:  {label: 'Connected', badge: 'text-bg-info',   icon: 'bi-plug'},
+        download:      {label: 'Download',  badge: 'text-bg-primary', icon: 'bi-cloud-download'},
+        login:         {label: 'Login',     badge: 'text-bg-success', icon: 'bi-box-arrow-in-right'},
+        login_failed:  {label: 'Login failed', badge: 'text-bg-danger', icon: 'bi-x-circle'},
+    };
+
+    const CLIENT_META = {
+        tinfoil:   {label: 'Tinfoil', icon: 'bi-nintendo-switch'},
+        cyberfoil: {label: 'CyberFoil', icon: 'bi-nintendo-switch'},
+        sphaira:   {label: 'Sphaira', icon: 'bi-nintendo-switch'},
+        web:       {label: 'Web', icon: 'bi-browser-chrome'},
+    };
+
+    function kindBadge(kind) {
+        const meta = KIND_META[kind] || {label: kind, badge: 'text-bg-secondary', icon: 'bi-activity'};
+        return `<span class="badge ${meta.badge}"><i class="bi ${meta.icon}"></i> ${meta.label}</span>`;
+    }
+
+    function clientCell(client) {
+        if (!client) return '<span class="text-secondary">—</span>';
+        const meta = CLIENT_META[client] || {label: client, icon: 'bi-app'};
+        return `<span class="text-nowrap"><i class="bi ${meta.icon}"></i> ${meta.label}</span>`;
+    }
+
+    function detailCell(e) {
+        if (e.kind === 'download') {
+            const size = e.size ? formatBytes(e.size) : '';
+            return e.filename
+                ? `<div class="small" style="word-break: break-all;">${esc(e.filename)}</div>${
+                    size ? `<div class="text-secondary small">${size}</div>` : ''}`
+                : '—';
+        }
+        if (e.kind === 'login_failed') {
+            return esc(e.detail || 'invalid credentials');
+        }
+        return '<span class="text-secondary">—</span>';
+    }
+
+    function render() {
+        const tbody = document.getElementById('activityBody');
+        const filter = document.getElementById('kindFilter').value;
+        const list = Object.values(events)
+            .filter(e => !filter || e.kind === filter)
+            .sort((a, b) => b.id - a.id);
+        document.getElementById('activityEmpty').classList.toggle('d-none', list.length > 0);
+        tbody.innerHTML = '';
+        list.forEach(e => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td class="text-secondary text-nowrap small"></td>
+                <td>${kindBadge(e.kind)}</td>
+                <td class="text-nowrap"></td>
+                <td>${clientCell(e.client)}</td>
+                <td class="font-monospace small text-secondary"></td>
+                <td style="max-width: 22rem;">${detailCell(e)}</td>
+                <td class="font-monospace small text-secondary"></td>`;
+            tr.children[0].textContent = e.ts
+                ? new Date(e.ts).toLocaleString() : '';
+            tr.children[2].textContent = e.username || '—';
+            tr.children[4].textContent = e.deviceUid || '—';
+            tr.children[6].textContent = e.ip || '—';
+            tbody.appendChild(tr);
+        });
+    }
+
+    document.getElementById('kindFilter').addEventListener('change', scheduleRender);
+
+    const live = new Realtime(['activity']);
+    live.on('activity', (type, data) => {
+        if (type === 'snapshot') {
+            events = {};
+            data.forEach(e => { events[e.id] = e; });
+        } else if (type === 'remove') {
+            delete events[data.id];
+        } else {
+            events[data.id] = data;
+        }
+        scheduleRender();
+    });
+    live.onStatus(connected => {
+        document.getElementById('liveDot').className =
+            'badge ' + (connected ? 'text-bg-success' : 'text-bg-secondary');
+        document.getElementById('liveDot').textContent = connected ? 'live' : 'offline';
+    });
+    live.start();
+
+</script>
+{% endblock %}

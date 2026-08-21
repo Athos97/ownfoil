@@ -4,6 +4,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from db import *
 from flask_login import LoginManager
+import activity
+from utils import client_address
 
 import logging
 import re
@@ -232,7 +234,7 @@ def login():
     username = request.form.get('user')
     password = request.form.get('password')
     remember = bool(request.form.get('remember'))
-    next_url = request.form.get('next', '')
+    next_url = request.args.get('next', '')
 
     user = User.query.filter_by(user=username).first()
 
@@ -240,10 +242,13 @@ def login():
     # take the user-supplied password, hash it, and compare it to the hashed password in the database
     if not user or not check_password_hash(user.password, password):
         logger.warning(f'Incorrect login for user {username}')
+        activity.record_login(username, success=False, ip=client_address(request),
+                              detail='invalid credentials')
         return redirect(url_for('auth.login')) # if the user doesn't exist or password is wrong, reload the page
 
-    # if the above check passes, then we know the user has the right credentials
+    # if the above check passes, then we know that the user has the right credentials
     logger.info(f'Sucessfull login for user {username}')
+    activity.record_login(username, success=True, ip=client_address(request))
     login_user(user, remember=remember)
 
     return redirect(next_url if len(next_url) else '/')

@@ -6,6 +6,7 @@ import os
 from flask import Request, Response, request, send_from_directory
 
 from .client import BaseClient
+import activity
 from db import Files, Libraries, increment_download_count_throttled
 from constants import APP_TYPE_FILTERS, ALLOWED_EXTENSIONS
 from utils import client_address
@@ -135,7 +136,7 @@ class SphairaClient(BaseClient):
         html = SPHAIRA_HTML_TEMPLATE.format(content)
         return Response(html)
 
-    def _serve_file(self, filename: str) -> Response: 
+    def _serve_file(self, filename: str) -> Response:
         """Serve a file from the given filename."""
         # Look up the file in the database by filename
         file = Files.query.filter_by(filename=filename).first()
@@ -149,6 +150,10 @@ class SphairaClient(BaseClient):
         # Count only once the response exists: a range past the end of the file raises out
         # of here, and a transfer that never happened is not a download.
         response = send_from_directory(file.folder, filename)
-        increment_download_count_throttled(file.filepath, client_address(request))
+        counted = increment_download_count_throttled(file.filepath, client_address(request))
+        activity.record_download(
+            request, file.filepath, size=file.size, client_name=self.CLIENT_NAME,
+            username=(request.user.user if getattr(request, 'user', None) else None),
+            counted=bool(counted))
 
         return response
