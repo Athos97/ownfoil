@@ -2,6 +2,10 @@ __pycache__
 config
 data
 
+# local game files mounted into the test/dev compose stack - never commit ROMs
+games
+docker-compose.test.yml
+
 # capture harness workdir: fixture db, settings and the pseudonym map
 tests/capture/.workdir
 
