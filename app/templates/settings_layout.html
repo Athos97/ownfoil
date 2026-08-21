@@ -22,6 +22,16 @@
                     </a>
                 </li>
                 <li class="nav-item">
+                    <a class="nav-link{% if request.path.startswith('/admin/update') %} active{% endif %}" href="/admin/update">
+                        Update Library
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link{% if request.path.startswith('/admin/add-content') %} active{% endif %}" href="/admin/add-content">
+                        Add Content
+                    </a>
+                </li>
+                <li class="nav-item">
                     <a class="nav-link{% if request.path.startswith('/admin/stats') %} active{% endif %}" href="/admin/stats">
                         Stats
                     </a>

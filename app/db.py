@@ -311,11 +311,14 @@ class TempFile(db.Model):
 
 
 class Download(db.Model):
-    """One update/DLC the downloader has picked a torrent for.
+    """One update/DLC/base the downloader has picked a transfer for.
 
-    A row exists per (app_id, app_version) target — `status` tracks the torrent's
-    lifecycle (`queued`/`downloading`/`failed`) plus `completed`, which is set from
-    app ownership once the library watcher has identified the downloaded file.
+    A row exists per (app_id, app_version) target — `status` tracks the
+    transfer's lifecycle (`queued`/`downloading`/`failed`) plus `completed`,
+    which is set from app ownership once the library watcher has identified
+    the downloaded file. `source` is which lane owns the row (`torrents` or
+    `ghosteshop`): each source retries only its own failures. `progress` is a
+    0-100 percentage for transfers ownfoil drives itself.
     """
     __tablename__ = 'downloads'
 
@@ -331,6 +334,8 @@ class Download(db.Model):
     indexer = db.Column(db.String)
     size = db.Column(db.Integer)
     seeders = db.Column(db.Integer)
+    source = db.Column(db.String)
+    progress = db.Column(db.Integer)
     status = db.Column(db.String, default='queued', server_default='queued')
     error = db.Column(db.String)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)

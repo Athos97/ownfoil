@@ -33,8 +33,10 @@ def run(library, document):
 
 def test_run_downloader_enqueues_the_task(library, monkeypatch):
     monkeypatch.setattr(tasks_mod.downloader_lib, 'run_downloader_job', lambda *a, **kw: None)
-    body = run(library, 'mutation { runDownloader { taskName status } }')
-    assert body['data']['runDownloader'] == {'taskName': 'downloader_run', 'status': 'PENDING'}
+    body = run(library, 'mutation { runDownloader(source: TORRENTS) { taskName status } }')
+    assert body['data']['runDownloader'] == {'taskName': 'downloader_torrents_run', 'status': 'PENDING'}
+    body = run(library, 'mutation { runDownloader(source: GHOSTESHOP) { taskName status } }')
+    assert body['data']['runDownloader'] == {'taskName': 'downloader_ghosteshop_run', 'status': 'PENDING'}
 
 
 def test_run_downloader_does_not_wait_for_the_scheduled_row(library, monkeypatch):
@@ -42,15 +44,21 @@ def test_run_downloader_does_not_wait_for_the_scheduled_row(library, monkeypatch
     onto that deferred row, or the button quietly does nothing for two hours."""
     import datetime
     from tasks import update_scheduled_task
-    update_scheduled_task('downloader_run', datetime.datetime.utcnow() + datetime.timedelta(hours=2))
+    update_scheduled_task('downloader_torrents_run',
+                          datetime.datetime.utcnow() + datetime.timedelta(hours=2))
 
-    body = run(library, 'mutation { runDownloader { taskName status } }')
+    body = run(library, 'mutation { runDownloader(source: TORRENTS) { taskName status } }')
     task = body['data']['runDownloader']
-    assert task['taskName'] == 'downloader_run'
+    assert task['taskName'] == 'downloader_torrents_run'
 
     from db import Task
-    manual = Task.query.filter_by(task_name='downloader_run', run_after=None).all()
+    manual = Task.query.filter_by(task_name='downloader_torrents_run', run_after=None).all()
     assert len(manual) == 1, "the manual run is its own immediate row"
+
+
+def test_run_downloader_requires_a_known_source(library):
+    body = run(library, 'mutation { runDownloader(source: CARRIER_PIDGEON) { id } }')
+    assert body.get('errors'), "an unknown source must be a schema error"
 
 
 def test_downloads_query_lists_rows_newest_first(library):

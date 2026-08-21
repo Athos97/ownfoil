@@ -41,9 +41,10 @@ SELECT * FROM
            SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END)
      FROM tasks),
   (SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(SUM(size), 0),
-           SUM(CASE WHEN status = 'downloading' THEN 1 ELSE 0 END),
-           SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END),
-           SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)
+            SUM(CASE WHEN status = 'downloading' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
+            COALESCE(SUM(progress), 0)
      FROM downloads)
 """
 

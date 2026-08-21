@@ -49,6 +49,25 @@ Everything Ownfoil does in the background is a task, and this page shows them li
 
 The worker section shows what each worker process is doing right now. How many there are is configured in [Workers](#workers), you can use it to see if the backlog of tasks can be optimized.
 
+## Downloads page
+
+Admin only. Every transfer the downloaders have picked: torrents handed to qBittorrent and direct Ghost eShop downloads, with live progress for the latter. A row flips to `completed` when the library watcher has identified the landed file - not merely when the transfer finished. Failed rows can be retried (through their own source) or removed.
+
+## Update Library page
+
+Admin only. Shows the missing-content work list both download sources draw from: the latest unowned update of every title and every unowned DLC. Each source gets a card with its readiness, schedule and a manual **Update now** button; in-flight transfers stream below. Sources are configured in [Settings](#settings-page); the two never race for the same target.
+
+## Add Content page
+
+Admin only. Two ways to bring games you do not own yet into the library:
+
+- **Ghost eShop**: search the catalog by name, pick a game, and choose among its base, updates and DLCs (with real sizes and owned badges). Queued items download into the game's own folder on the next Ghost eShop pass - or run it right away from Update Library.
+- **Torrents**: search your Jackett indexers with free text and hand any result straight to qBittorrent, using the torrents source's save path and category.
+
+## Stats page
+
+Admin only. Library-wide figures plus the breakdowns: files by extension, by library, by verification verdict, and apps by type. The **Unidentified files** section lists each file ownfoil could not match to a title together with the error that last failed it - typically a truncated download or a keys file missing the title's master key (fix the keys and the file is retried automatically).
+
 ## Settings page
 
 Admin only, and a single scrolling page.
@@ -309,3 +328,33 @@ The second setting ensures CPU/disk heavy tasks do not loose the benefit of para
 * __Network share or a single hard drive: `1`__ - avoids seek thrashing, the safe default.
 * __SATA SSD: `2` to `3`__ - no seek penalty, so you are limited by CPU.
 * __NVMe with spare CPU cores: raise it towards your core count__ - each compression uses about 3 to 4 threads, so the CPU, not the disk, is the ceiling.
+
+## Downloader
+
+Two download sources coexist under one section. Each has its own enable switch, credentials, schedule interval and manual trigger, and both draw from the same missing-content work list without ever racing for the same target (one row per app id + version).
+
+### Torrents source
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `Enable torrents source` | off | Run the periodic scan and allow manual runs. |
+| `Jackett URL` / `API key` | - | Tracker search backend. |
+| `qBittorrent URL` / credentials | - | Where torrents are handed to. |
+| `qBittorrent save path` | `/games` | Must be the same volume as a library path, as qBittorrent sees it. |
+| `Min seeders` / `Max size` / `Preferred extensions` / `Indexers` | `3` / no limit / `nsz, nsp, xcz, xci` / all | Result filters; results failing any of them are ignored. |
+| `Run interval` | `1h` | Periodic pass; `0` disables it. |
+
+Each pass searches every missing update/DLC (app id first, then game name), ranks the matches and adds the best torrent. A bundle torrent covering several targets is added once.
+
+### Ghost eShop source
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `Enable Ghost eShop source` | off | Run the periodic scan and allow manual runs. |
+| `Portal URL` | `https://pro.nlib.cc` | The Ghost eShop PRO portal. |
+| `Username` / `Password` | - | Your PRO credentials (password kept out of the UI once saved). |
+| `Catalog language` | `en` | Language for catalog names. |
+| `Run interval` | `24h` | Periodic pass; `0` disables it. |
+| `Download root` | first library path | Where per-game folders are created. |
+
+Downloads go straight into `<library>/<game name>/` with the same folder naming the organizer uses, resumable across runs if a transfer is interrupted. Console keys must be loaded for the landed files to be identified.

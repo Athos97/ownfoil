@@ -45,6 +45,17 @@
                 <tbody id="byAppType"></tbody>
             </table>
         </section>
+
+        <section>
+            <h4 class="mb-3">Unidentified files</h4>
+            <p class="text-secondary small">Files ownfoil could not match to any title,
+                with the error that last failed them - typically truncated downloads or a
+                keys file missing the title's master key.</p>
+            <table class="table table-sm stat-table">
+                <thead><tr><th>File</th><th>Error</th><th>Attempts</th><th>Size</th><th>Last attempt</th></tr></thead>
+                <tbody id="unidentifiedFiles"></tbody>
+            </table>
+        </section>
     </div>
 
 </div>
@@ -64,6 +75,7 @@
                 filesByLibrary { key count size }
                 filesByVerificationStatus { status count size }
                 appsByType { key count owned }
+                unidentifiedFilesDetail { filename error attempts size lastAttempt }
             }
         }`;
 
@@ -161,6 +173,32 @@
         // turn the last one into "Dlc".
         renderTable('byAppType', (data.appsByType || []).map(
             b => [b.key, count(b.count), count(b.owned)]));
+
+        const unid = document.getElementById('unidentifiedFiles');
+        const unidRows = data.unidentifiedFilesDetail || [];
+        unid.innerHTML = '';
+        if (!unidRows.length) {
+            const columns = unid.closest('table').querySelectorAll('thead th').length;
+            unid.innerHTML = `<tr><td colspan="${columns}"
+                class="text-secondary fst-italic">Nothing to report.</td></tr>`;
+        } else {
+            unidRows.forEach(f => {
+                const tr = document.createElement('tr');
+                [f.filename,
+                 f.error || '—',
+                 count(f.attempts),
+                 f.size ? formatBytes(f.size) : '—',
+                 f.lastAttempt ? new Date(f.lastAttempt).toLocaleString() : '—',
+                ].forEach((cell, i) => {
+                    const td = document.createElement('td');
+                    if (i === 0) td.style.wordBreak = 'break-all';
+                    if (i === 1) td.className = 'text-secondary small';
+                    td.textContent = cell;
+                    tr.appendChild(td);
+                });
+                unid.appendChild(tr);
+            });
+        }
     }
 
     loadStats();

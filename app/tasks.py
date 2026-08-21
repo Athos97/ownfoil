@@ -23,6 +23,7 @@ from db import (
     verification_status,
 )
 from settings import get_settings
+import settings as settings_mod
 from utils import interval_string_to_timedelta, delete_empty_folders, human_size
 from library import (
     add_missing_apps_for_title, update_title_flags,
@@ -147,7 +148,8 @@ TASK_DISPLAY = {
         f'Moved {os.path.basename(src_path)} to {os.path.basename(dest_path)}'),
     'handle_file_deleted': lambda filepath, **kw: f'Deleted {os.path.basename(filepath)}',
     'handle_dir_deleted': lambda dirpath, **kw: f'Deleted folder {os.path.basename(dirpath)}',
-    'downloader_run': lambda **kw: 'Download missing updates & DLC',
+    'downloader_torrents_run': lambda **kw: 'Download missing content (torrents)',
+    'downloader_ghosteshop_run': lambda **kw: 'Download missing content (Ghost eShop)',
 }
 
 
@@ -621,31 +623,49 @@ def update_titledb_task(**kwargs):
 
 
 def arm_downloader_schedule(settings=None):
-    """Create/refresh/delete the scheduled downloader row according to current settings.
+    """Create/refresh/delete the scheduled rows for both download sources.
 
-    The downloader is disabled by default, so unlike titledb there is no row until the
-    feature is configured - and disabling it removes the row rather than leaving a
-    periodic no-op behind.
+    Each source is disabled by default, so unlike titledb there is no row until
+    the feature is configured - and disabling a source removes its row rather
+    than leaving a periodic no-op behind.
     """
     settings = settings or get_settings()
-    delta = interval_string_to_timedelta(settings.get('downloader', {}).get('interval', '1h'))
+    torrents = settings.get('downloader', {}).get('torrents', {}) or {}
+    ghost = settings.get('downloader', {}).get('ghosteshop', {}) or {}
+
+    delta = interval_string_to_timedelta(torrents.get('interval', '1h'))
     run_after = None
-    if downloader_lib.is_configured(settings) and delta:
+    if downloader_lib.torrents_configured(settings) and delta:
         run_after = datetime.datetime.utcnow() + delta
-    update_scheduled_task('downloader_run', run_after)
+    update_scheduled_task('downloader_torrents_run', run_after)
+
+    delta = interval_string_to_timedelta(ghost.get('interval', '24h'))
+    run_after = None
+    if downloader_lib.ghosteshop_configured(settings) and delta:
+        run_after = datetime.datetime.utcnow() + delta
+    update_scheduled_task('downloader_ghosteshop_run', run_after)
 
 
-@register_task('downloader_run')
-def downloader_run_task(**kwargs):
-    """Check for missing updates/DLCs and download them, then re-arm the next run."""
-    settings = get_settings()
-    try:
-        downloader_lib.run_downloader_job(settings, progress=_task_progress(_current_task_id))
-    except Exception:
-        update_scheduled_task('downloader_run',
-                              datetime.datetime.utcnow() + DOWNLOADER_RETRY_DELAY)
-        raise
-    arm_downloader_schedule(settings)
+def _register_downloader_task(name, source):
+    @register_task(name)
+    def _run(**kwargs):
+        """Check for missing content and download it via this source, then re-arm."""
+        settings = get_settings()
+        try:
+            downloader_lib.run_downloader_job(
+                settings, source=source, progress=_task_progress(_current_task_id))
+        except Exception:
+            update_scheduled_task(name,
+                                  datetime.datetime.utcnow() + DOWNLOADER_RETRY_DELAY)
+            raise
+        arm_downloader_schedule(settings)
+    return _run
+
+
+downloader_torrents_run_task = _register_downloader_task(
+    'downloader_torrents_run', downloader_lib.SOURCE_TORRENTS)
+downloader_ghosteshop_run_task = _register_downloader_task(
+    'downloader_ghosteshop_run', downloader_lib.SOURCE_GHOSTESHOP)
 
 
 # --- Scan pipeline ---
@@ -735,7 +755,17 @@ def _needs_identify(file, mgmt):
     """The per-file form of library.get_files_to_identify."""
     if not file.identified and not file.identification_attempts:
         return True
-    return bool(titles_lib.Keys.keys_loaded) and file.identification_type == 'filename'
+    if bool(titles_lib.Keys.keys_loaded) and file.identification_type == 'filename':
+        return True
+    # Keys were loaded (or reloaded) after the last failed attempt: the failure
+    # was probably a master key the old keys file lacked, which is now fixed -
+    # worth exactly one more try per keys reload.
+    if (not file.identified
+            and settings_mod.KEYS_LOADED_AT is not None
+            and file.last_attempt is not None
+            and settings_mod.KEYS_LOADED_AT > file.last_attempt):
+        return True
+    return False
 
 
 def _identify(file, mgmt):

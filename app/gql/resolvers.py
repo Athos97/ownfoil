@@ -18,10 +18,12 @@ from .filters import (
 )
 from .selection import Selection
 from .types import (
-    App, AppConnection, AppTypeCount, AppVersion, Download, DownloadStatus, File,
-    FileConnection, Library, LibraryStats, Ownership, SizedCountByKey, Task,
+    App, AppConnection, AppTypeCount, AppVersion, Download, DownloadSource,
+    DownloadStatus, File, FileConnection, GhostshopGame, GhostshopCatalogEntry,
+    GhostshopSearchResult, JackettSearchResult, Library, LibraryStats,
+    MissingTarget, Ownership, SizedCountByKey, SourceStatus, Task,
     TaskStatus, Title, TitleConnection, TitledbDlc, TitledbVersion,
-    VerificationStatusCount, Worker, decode_json_list,
+    UnidentifiedFile, VerificationStatusCount, Worker, decode_json_list,
 )
 
 
@@ -1145,6 +1147,21 @@ def resolve_stats(*, ctx: GraphQLContext, info) -> LibraryStats:
             VerificationStatusCount(status=status, count=count, size=size)
             for status, (count, size) in buckets.items()]
 
+    if ctx.can_admin and sel.has("unidentifiedFilesDetail"):
+        stats.unidentified_files_detail = [
+            UnidentifiedFile(
+                filename=r.filename or "",
+                error=r.identification_error,
+                attempts=int(r.identification_attempts or 0),
+                size=int(r.size or 0) or None,
+                last_attempt=_iso(r.last_attempt))
+            for r in db.session.execute(text("""
+            SELECT filename, identification_error, identification_attempts,
+                   size, last_attempt
+            FROM files WHERE identified = 0
+            ORDER BY last_attempt IS NULL DESC, last_attempt ASC, filename ASC
+            LIMIT 200""")).all()]
+
     return stats
 
 
@@ -1197,8 +1214,8 @@ def resolve_downloads(*, status: Optional[DownloadStatus], limit: int,
         where = " WHERE status = :status"
     rows = db.session.execute(text(f"""
     SELECT id, title_id, app_id, app_version, app_type, name, search_query,
-           torrent_hash, torrent_name, indexer, size, seeders, status, error,
-           created_at, updated_at
+           torrent_hash, torrent_name, indexer, size, seeders, source, progress,
+           status, error, created_at, updated_at
     FROM downloads{where}
     ORDER BY created_at DESC, id DESC
     LIMIT :limit
@@ -1209,6 +1226,10 @@ def resolve_downloads(*, status: Optional[DownloadStatus], limit: int,
             app_type = AppType(r.app_type)
         except ValueError:
             app_type = AppType.UPDATE
+        try:
+            source = DownloadSource(r.source) if r.source else None
+        except ValueError:
+            source = DownloadSource.TORRENTS
         out.append(Download(
             id=strawberry.ID(str(r.id)),
             title_id=r.title_id or "",
@@ -1222,9 +1243,154 @@ def resolve_downloads(*, status: Optional[DownloadStatus], limit: int,
             indexer=r.indexer,
             size=r.size,
             seeders=r.seeders,
+            source=source,
+            progress=r.progress,
             status=DownloadStatus(r.status or 'queued'),
             error=r.error,
             created_at=_iso(r.created_at),
             updated_at=_iso(r.updated_at),
         ))
     return out
+
+
+# ------------- downloader sources & content search -------------
+
+def resolve_missing_targets(ctx: GraphQLContext, info) -> List[MissingTarget]:
+    """The shared missing-content work list, for the Update Library page."""
+    if not ctx.can_admin:
+        return []
+    import downloader as downloader_lib
+    from constants import APP_TYPE_DLC
+    type_map = {'BASE': AppType.BASE, 'UPDATE': AppType.UPDATE, 'DLC': AppType.DLC}
+    out = []
+    for t in downloader_lib.get_missing_targets():
+        try:
+            app_type = type_map[t.get('app_type')]
+        except KeyError:
+            continue
+        out.append(MissingTarget(
+            title_id=t.get('title_id') or "",
+            app_id=t.get('app_id') or "",
+            app_version=_version_or_zero(t.get('app_version')),
+            app_type=app_type,
+            name=t.get('name'),
+            patch_level=int(t.get('patch_level') or 0),
+        ))
+    return out
+
+
+_SOURCE_TASK_NAMES = {
+    DownloadSource.TORRENTS: 'downloader_torrents_run',
+    DownloadSource.GHOSTESHOP: 'downloader_ghosteshop_run',
+}
+
+
+def resolve_downloader_status(ctx: GraphQLContext, info) -> List[SourceStatus]:
+    """Per-source configuration snapshot plus the next scheduled run."""
+    if not ctx.can_admin:
+        return []
+    import downloader as downloader_lib
+    from settings import get_settings
+    downloader = get_settings().get('downloader', {}) or {}
+    statuses = []
+    for source, task_name in _SOURCE_TASK_NAMES.items():
+        if source == DownloadSource.TORRENTS:
+            block = downloader.get('torrents', {}) or {}
+            configured = downloader_lib.torrents_configured(get_settings())
+        else:
+            block = downloader.get('ghosteshop', {}) or {}
+            configured = downloader_lib.ghosteshop_configured(get_settings())
+        next_run = None
+        row = db.session.execute(text(
+            "SELECT run_after FROM tasks WHERE task_name = :name "
+            "AND status = 'pending' ORDER BY run_after ASC LIMIT 1"
+        ), {"name": task_name}).first()
+        if row and row[0]:
+            next_run = _iso(row[0])
+        statuses.append(SourceStatus(
+            source=source,
+            configured=configured,
+            enabled=bool(block.get('enabled')),
+            interval=block.get('interval'),
+            next_run=next_run,
+        ))
+    return statuses
+
+
+def _ghostshop_provider(ctx: GraphQLContext):
+    from ghostshop import GhosteshopProvider, GhostshopError
+    from settings import get_settings
+    if not ctx.can_admin:
+        raise PermissionError("admin only")
+    settings = get_settings().get('downloader', {}).get('ghosteshop', {}) or {}
+    return GhosteshopProvider(settings), settings
+
+
+def resolve_ghostshop_search(query: str, limit: int,
+                             ctx: GraphQLContext, info) -> List[GhostshopSearchResult]:
+    """Text search over the Ghost eShop catalog. Admin only."""
+    if not ctx.can_admin:
+        return []
+    from ghostshop import GhostshopError
+    try:
+        provider, _settings = _ghostshop_provider(ctx)
+        session = provider.login()
+        results = provider.search(session, query)
+    except GhostshopError:
+        return []
+    return [GhostshopSearchResult(tid=r.tid, title=r.title)
+            for r in results[:max(1, min(limit, 50))]]
+
+
+_CATEGORY_TO_APPTYPE = {'BASE': AppType.BASE, 'UPDATE': AppType.UPDATE, 'DLC': AppType.DLC}
+
+
+def resolve_ghostshop_game(tid: str, ctx: GraphQLContext, info) -> Optional[GhostshopGame]:
+    """One game family from the Ghost eShop catalog, ownership-resolved. Admin only."""
+    if not ctx.can_admin:
+        return None
+    from ghostshop import GhostshopError
+    from db import is_app_owned
+    try:
+        provider, _settings = _ghostshop_provider(ctx)
+        session = provider.login()
+        card = provider.fetch_game(session, tid)
+    except GhostshopError:
+        return None
+    if card is None:
+        return None
+    entries = []
+    for e in card.entries:
+        try:
+            app_type = _CATEGORY_TO_APPTYPE[e.category]
+        except KeyError:
+            continue
+        entries.append(GhostshopCatalogEntry(
+            name=e.name,
+            tid=e.tid,
+            category=app_type,
+            version=e.version,
+            size=e.size or None,
+            owned=is_app_owned(e.tid, str(e.version)),
+        ))
+    return GhostshopGame(title=card.title, base_tid=tid.upper(), entries=entries)
+
+
+def resolve_jackett_search(query: str, limit: int,
+                           ctx: GraphQLContext, info) -> List[JackettSearchResult]:
+    """Raw Jackett search for arbitrary text. Admin only."""
+    if not ctx.can_admin:
+        return []
+    import jackett
+    from settings import get_settings
+    torrents = get_settings().get('downloader', {}).get('torrents', {}) or {}
+    results = jackett.search(torrents.get('jackett', {}) or {}, query)
+    return [JackettSearchResult(
+        title=r.get('title') or '',
+        download_url=r.get('download_url') or '',
+        seeders=int(r.get('seeders') or 0),
+        leechers=int(r.get('leechers') or 0),
+        size=int(r.get('size') or 0) or None,
+        indexer=r.get('indexer'),
+        publish_date=r.get('publish_date') or None,
+    ) for r in results[:max(1, min(limit, 100))]]

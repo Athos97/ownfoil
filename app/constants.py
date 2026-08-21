@@ -85,25 +85,38 @@ DEFAULT_SETTINGS = {
         },
     },
     "downloader": {
-        "enabled": False,
-        "jackett": {
-            "url": "",
-            "api_key": "",
+        "torrents": {
+            "enabled": False,
+            "jackett": {
+                "url": "",
+                "api_key": "",
+            },
+            "qbittorrent": {
+                "url": "",
+                "username": "",
+                "password": "",
+                "category": "ownfoil",
+                "save_path": "/games",
+            },
+            "filters": {
+                "min_seeders": 3,
+                "preferred_ext": ["nsz", "nsp", "xcz", "xci"],
+                "max_size_gb": 0,
+                "indexers": [],
+            },
+            "interval": "1h",
         },
-        "qbittorrent": {
-            "url": "",
+        "ghosteshop": {
+            "enabled": False,
+            "url": "https://pro.nlib.cc",
             "username": "",
             "password": "",
-            "category": "ownfoil",
-            "save_path": "/games",
+            "language": "en",
+            "verify_ssl": False,
+            # Empty: downloads land in the first configured library path.
+            "library_path": "",
+            "interval": "24h",
         },
-        "filters": {
-            "min_seeders": 3,
-            "preferred_ext": ["nsz", "nsp", "xcz", "xci"],
-            "max_size_gb": 0,
-            "indexers": [],
-        },
-        "interval": "1h",
     },
 }
 

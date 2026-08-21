@@ -2,6 +2,7 @@ from constants import *
 from utils import *
 import yaml
 import os, sys, tempfile
+import datetime
 import threading
 import hashlib
 from contextlib import contextmanager
@@ -13,6 +14,11 @@ import logging
 # Reentrant: load_settings holds this lock and calls _dump_settings, which re-acquires it.
 settings_lock = threading.RLock()
 keys_lock = threading.Lock()
+
+# When this process last loaded a *new or changed* keys file (local time, matching
+# Files.last_attempt). A file whose identification failed before this moment gets one
+# retry: the usual reason for the failure was a master key the old file lacked.
+KEYS_LOADED_AT = None
 
 
 def _dump_settings(settings):
@@ -63,6 +69,7 @@ def get_settings():
 logger = logging.getLogger('main')
 
 def load_keys(key_file=KEYS_FILE):
+    global KEYS_LOADED_AT
     with keys_lock:
         valid = None
         missing = Keys.getExistingMasterKeys()
@@ -71,15 +78,17 @@ def load_keys(key_file=KEYS_FILE):
         if not os.path.isfile(key_file):
             logger.debug(f'Keys file {key_file} does not exist.')
             return valid, missing, corrupt
-        
+
         with open(key_file, 'rb') as f:
             key_file_checksum = hashlib.sha256(f.read()).hexdigest()
-        
+
         try:
             if Keys.keys_loaded == None or key_file_checksum != Keys.getLoadedKeysChecksum():
                 valid = Keys.load(key_file)
                 missing = Keys.getMissingMasterKeys()
                 corrupt = Keys.getIncorrectKeysRevisions()
+                if Keys.keys_loaded:
+                    KEYS_LOADED_AT = datetime.datetime.now()
             else:
                 valid = Keys.keys_loaded
                 missing = Keys.getMissingMasterKeys()
@@ -180,6 +189,24 @@ def normalize_library_paths(settings):
     library['paths'] = normalized
     return changed
 
+def migrate_downloader_settings(settings):
+    """Move the pre-source downloader layout (jackett/qbittorrent/filters/interval
+    directly under `downloader`) into the per-source `downloader.torrents` block.
+    Returns True if changed."""
+    downloader = settings.get('downloader')
+    if not isinstance(downloader, dict) or 'torrents' in downloader:
+        return False
+    old_keys = ('enabled', 'jackett', 'qbittorrent', 'filters', 'interval')
+    if not any(k in downloader for k in old_keys):
+        return False
+    torrents = {k: downloader[k] for k in old_keys if k in downloader}
+    downloader.clear()
+    downloader['torrents'] = torrents
+    logger.info('Migrated downloader settings to the per-source layout '
+                '(jackett/qbittorrent block moved under downloader.torrents).')
+    return True
+
+
 def load_settings():
     settings_updated = False
     with settings_lock:
@@ -197,6 +224,10 @@ def load_settings():
 
             # Flatten legacy per-path watcher objects back to plain path strings
             if normalize_library_paths(settings):
+                settings_updated = True
+
+            # Move the flat downloader block under downloader.torrents
+            if migrate_downloader_settings(settings):
                 settings_updated = True
 
             # Remove obsolete keys from loaded settings

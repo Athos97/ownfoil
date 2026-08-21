@@ -562,17 +562,18 @@
 
                 <hr class="hr-settings">
                 <h2 class="pb-2">Downloader</h2>
-                <p>Automatically download missing updates and DLCs: each run searches
-                    <a href="https://github.com/Jackett/Jackett" target="_blank" rel="noopener">Jackett</a>
-                    for the latest unowned version of every title, adds the best torrent to
-                    qBittorrent, and lets the library watcher pick the file up once it lands.</p>
+                <p>Automatically fetch missing updates and DLCs. Two sources coexist -
+                    each with its own credentials, schedule and manual trigger - and they
+                    never race for the same content.</p>
 
                 <div class="mb-3 form-check">
-                    <input type="checkbox" class="form-check-input" id="downloaderEnabledCheck"
-                        aria-describedby="downloaderEnabledCheckHelp">
-                    <label class="form-check-label" for="downloaderEnabledCheck">Enable auto-download</label>
-                    <div id="downloaderEnabledCheckHelp" class="form-text">Runs periodically (see interval below) and
-                        only when Jackett and qBittorrent are reachable.</div>
+                    <input type="checkbox" class="form-check-input" id="torrentsEnabledCheck"
+                        aria-describedby="torrentsEnabledCheckHelp">
+                    <label class="form-check-label" for="torrentsEnabledCheck">Enable torrents source</label>
+                    <div id="torrentsEnabledCheckHelp" class="form-text">Searches
+                        <a href="https://github.com/Jackett/Jackett" target="_blank" rel="noopener">Jackett</a>
+                        for the latest unowned version of every title, adds the best torrent to
+                        qBittorrent, and lets the library watcher pick the file up once it lands.</div>
                 </div>
 
                 <h4 class="pt-3 pb-2">Jackett</h4>
@@ -660,7 +661,7 @@
                 </div>
                 <div class="row mb-3">
                     <div class="col-6">
-                        <label for="dlIntervalInput" class="form-label">Run interval:</label>
+                        <label for="dlIntervalInput" class="form-label">Torrents run interval:</label>
                         <input type="text" class="form-control" id="dlIntervalInput"
                             aria-describedby="dlIntervalHelp" placeholder="1h">
                         <div id="dlIntervalFeedback"></div>
@@ -674,11 +675,85 @@
 
                 <div class="mb-3">
                     <button type="button" id="testDownloaderBtn" class="btn btn-secondary"
-                        onClick='testDownloaderConnection()'>Test connection</button>
+                        onClick='testDownloaderConnection()'>Test connections</button>
                     <button type="button" id="runDownloaderNowBtn" class="btn btn-secondary"
-                        onClick='runDownloaderNow()'>Run now</button>
+                        onClick='runDownloaderNow()'>Run torrents now</button>
                     <button type="button" id="submitDownloaderSettingsBtn" class="btn btn-primary"
                         onClick='submitDownloaderSettings()'>Submit</button>
+                </div>
+
+                <hr class="hr-settings">
+                <h2 class="pb-2">Ghost eShop</h2>
+                <p>Direct download source: logs into a
+                    <a href="https://pro.nlib.cc" target="_blank" rel="noopener">Ghost eShop PRO</a>
+                    account and fetches each missing item as a resumable chunked download
+                    straight into the game's own folder inside a library path.</p>
+
+                <div class="mb-3 form-check">
+                    <input type="checkbox" class="form-check-input" id="ghostEnabledCheck"
+                        aria-describedby="ghostEnabledCheckHelp">
+                    <label class="form-check-label" for="ghostEnabledCheck">Enable Ghost eShop source</label>
+                    <div id="ghostEnabledCheckHelp" class="form-text">Runs periodically (see interval below)
+                        and only when the credentials work.</div>
+                </div>
+
+                <div class="row mb-3">
+                    <div class="col-4">
+                        <label for="ghostUrlInput" class="form-label">Portal URL:</label>
+                        <input type="text" class="form-control" id="ghostUrlInput" aria-describedby="ghostUrlHelp"
+                            placeholder="https://pro.nlib.cc">
+                        <div id="ghostUrlHelp" class="form-text">Change it if the portal moves domains.</div>
+                    </div>
+                    <div class="col-4">
+                        <label for="ghostUsernameInput" class="form-label">Username:</label>
+                        <input type="text" class="form-control" id="ghostUsernameInput">
+                    </div>
+                    <div class="col-4">
+                        <label for="ghostPasswordInput" class="form-label">Password:</label>
+                        <input type="password" class="form-control" id="ghostPasswordInput"
+                            aria-describedby="ghostPasswordHelp" placeholder="Leave empty to keep current">
+                        <div id="ghostPasswordHelp" class="form-text">Leave empty to keep the stored one.</div>
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-4">
+                        <label for="ghostLanguageInput" class="form-label">Catalog language:</label>
+                        <input type="text" class="form-control" id="ghostLanguageInput"
+                            aria-describedby="ghostLanguageHelp" placeholder="en">
+                        <div id="ghostLanguageHelp" class="form-text">Language for catalog names
+                            (e.g. <code>en</code>, <code>es</code>).</div>
+                    </div>
+                    <div class="col-4">
+                        <label for="ghostIntervalInput" class="form-label">Run interval:</label>
+                        <input type="text" class="form-control" id="ghostIntervalInput"
+                            aria-describedby="ghostIntervalHelp" placeholder="24h">
+                        <div id="ghostIntervalFeedback"></div>
+                        <div id="ghostIntervalHelp" class="form-text">Same format as the TitleDB interval.
+                            <code>0</code> disables the periodic run.</div>
+                    </div>
+                    <div class="col-4">
+                        <label for="ghostLibraryPathInput" class="form-label">Download root:</label>
+                        <input type="text" class="form-control" id="ghostLibraryPathInput"
+                            aria-describedby="ghostLibraryPathHelp" placeholder="empty = first library path">
+                        <div id="ghostLibraryPathHelp" class="form-text">Where the per-game folders are
+                            created. Empty uses the first configured library path.</div>
+                    </div>
+                </div>
+                <div class="mb-3 form-check">
+                    <input type="checkbox" class="form-check-input" id="ghostVerifySslCheck">
+                    <label class="form-check-label" for="ghostVerifySslCheck">Verify TLS certificates</label>
+                    <div class="form-text">Leave off if the portal serves a self-signed certificate.</div>
+                </div>
+
+                <div id="ghostTestResult"></div>
+
+                <div class="mb-3">
+                    <button type="button" id="testGhostBtn" class="btn btn-secondary"
+                        onClick='testGhostConnection()'>Test Ghost eShop login</button>
+                    <button type="button" id="runGhostNowBtn" class="btn btn-secondary"
+                        onClick='runGhostNow()'>Run Ghost eShop now</button>
+                    <button type="button" id="submitGhostSettingsBtn" class="btn btn-primary"
+                        onClick='submitGhostSettings()'>Submit</button>
                 </div>
 
             </div>
@@ -1467,28 +1542,47 @@
 
     function downloaderSettingsPayload() {
         data = {
-            enabled: getCheckboxStatus("downloaderEnabledCheck"),
-            jackett: {
-                url: getInputVal("jackettUrlInput").trim()
-            },
-            qbittorrent: {
-                url: getInputVal("qbtUrlInput").trim(),
-                username: getInputVal("qbtUsernameInput").trim(),
-                category: getInputVal("qbtCategoryInput").trim(),
-                save_path: getInputVal("qbtSavePathInput").trim()
-            },
-            filters: {
-                min_seeders: parseInt(getInputVal("dlMinSeedersInput")) || 0,
-                preferred_ext: parseCsvList(getInputVal("dlPreferredExtInput")),
-                max_size_gb: parseFloat(getInputVal("dlMaxSizeGbInput")) || 0,
-                indexers: parseCsvList(getInputVal("dlIndexersInput"))
-            },
-            interval: getInputVal("dlIntervalInput").trim()
+            torrents: {
+                enabled: getCheckboxStatus("torrentsEnabledCheck"),
+                jackett: {
+                    url: getInputVal("jackettUrlInput").trim()
+                },
+                qbittorrent: {
+                    url: getInputVal("qbtUrlInput").trim(),
+                    username: getInputVal("qbtUsernameInput").trim(),
+                    category: getInputVal("qbtCategoryInput").trim(),
+                    save_path: getInputVal("qbtSavePathInput").trim()
+                },
+                filters: {
+                    min_seeders: parseInt(getInputVal("dlMinSeedersInput")) || 0,
+                    preferred_ext: parseCsvList(getInputVal("dlPreferredExtInput")),
+                    max_size_gb: parseFloat(getInputVal("dlMaxSizeGbInput")) || 0,
+                    indexers: parseCsvList(getInputVal("dlIndexersInput"))
+                },
+                interval: getInputVal("dlIntervalInput").trim()
+            }
         }
         const apiKey = getInputVal("jackettApiKeyInput");
-        if (apiKey) { data['jackett']['api_key'] = apiKey; }
+        if (apiKey) { data['torrents']['jackett']['api_key'] = apiKey; }
         const qbtPassword = getInputVal("qbtPasswordInput");
-        if (qbtPassword) { data['qbittorrent']['password'] = qbtPassword; }
+        if (qbtPassword) { data['torrents']['qbittorrent']['password'] = qbtPassword; }
+        return data;
+    }
+
+    function ghostSettingsPayload() {
+        data = {
+            ghosteshop: {
+                enabled: getCheckboxStatus("ghostEnabledCheck"),
+                url: getInputVal("ghostUrlInput").trim(),
+                username: getInputVal("ghostUsernameInput").trim(),
+                language: getInputVal("ghostLanguageInput").trim() || 'en',
+                verify_ssl: getCheckboxStatus("ghostVerifySslCheck"),
+                library_path: getInputVal("ghostLibraryPathInput").trim(),
+                interval: getInputVal("ghostIntervalInput").trim() || '24h'
+            }
+        }
+        const password = getInputVal("ghostPasswordInput");
+        if (password) { data['ghosteshop']['password'] = password; }
         return data;
     }
 
@@ -1503,7 +1597,7 @@
                 if (!result['success']) {
                     if (result['errors']) {
                         result['errors'].forEach(error => {
-                            if (error['path'] === 'downloader/interval') {
+                            if (error['path'] === 'downloader/torrents/interval') {
                                 $('#dlIntervalFeedback').text(error['error']);
                                 $('#dlIntervalFeedback').addClass('invalid-feedback d-block');
                                 $("#dlIntervalInput").removeClass('is-valid');
@@ -1522,13 +1616,43 @@
         });
     }
 
+    function submitGhostSettings() {
+        $('#submitGhostSettingsBtn').prop('disabled', true);
+        $.ajax({
+            url: "/api/settings/downloader",
+            type: 'POST',
+            data: JSON.stringify(ghostSettingsPayload()),
+            contentType: "application/json",
+            success: function (result) {
+                if (!result['success']) {
+                    if (result['errors']) {
+                        result['errors'].forEach(error => {
+                            if (error['path'] === 'downloader/ghosteshop/interval') {
+                                $('#ghostIntervalFeedback').text(error['error']);
+                                $('#ghostIntervalFeedback').addClass('invalid-feedback d-block');
+                                $("#ghostIntervalInput").removeClass('is-valid');
+                                $("#ghostIntervalInput").addClass('is-invalid');
+                            }
+                        });
+                    }
+                } else {
+                    $('#ghostIntervalFeedback').text('');
+                    $('#ghostIntervalFeedback').removeClass('invalid-feedback d-block');
+                    $("#ghostIntervalInput").removeClass('is-invalid');
+                    $("#ghostIntervalInput").addClass('is-valid');
+                }
+                $('#submitGhostSettingsBtn').prop('disabled', false);
+            }
+        });
+    }
+
     function testDownloaderConnection() {
         $('#testDownloaderBtn').prop('disabled', true);
         $('#downloaderTestResult').empty();
         $.ajax({
             url: "/api/settings/downloader/test",
             type: 'POST',
-            data: JSON.stringify(downloaderSettingsPayload()),
+            data: JSON.stringify({...downloaderSettingsPayload(), ...ghostSettingsPayload()}),
             contentType: "application/json",
             success: function (result) {
                 ['jackett', 'qbittorrent'].forEach(service => {
@@ -1538,10 +1662,39 @@
                     $('#downloaderTestResult').append(
                         `<div class="alert ${cls} py-2 mb-2">${service}: ${r['message']}</div>`);
                 });
+                const g = result['ghosteshop'];
+                if (g) {
+                    const cls = g['success'] ? 'alert-success' : 'alert-danger';
+                    $('#ghostTestResult').append(
+                        `<div class="alert ${cls} py-2 mb-2">ghosteshop: ${g['message']}</div>`);
+                }
                 $('#testDownloaderBtn').prop('disabled', false);
             },
             error: function () {
                 $('#testDownloaderBtn').prop('disabled', false);
+            }
+        });
+    }
+
+    function testGhostConnection() {
+        $('#testGhostBtn').prop('disabled', true);
+        $('#ghostTestResult').empty();
+        $.ajax({
+            url: "/api/settings/downloader/test",
+            type: 'POST',
+            data: JSON.stringify(ghostSettingsPayload()),
+            contentType: "application/json",
+            success: function (result) {
+                const g = result['ghosteshop'];
+                if (g) {
+                    const cls = g['success'] ? 'alert-success' : 'alert-danger';
+                    $('#ghostTestResult').append(
+                        `<div class="alert ${cls} py-2 mb-2">${g['message']}</div>`);
+                }
+                $('#testGhostBtn').prop('disabled', false);
+            },
+            error: function () {
+                $('#testGhostBtn').prop('disabled', false);
             }
         });
     }
@@ -1552,9 +1705,21 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ query: 'mutation { runDownloader { id status } }' })
+            body: JSON.stringify({ query: 'mutation { runDownloader(source: TORRENTS) { id status } }' })
         }).finally(() => {
             $('#runDownloaderNowBtn').prop('disabled', false);
+        });
+    }
+
+    function runGhostNow() {
+        $('#runGhostNowBtn').prop('disabled', true);
+        fetch('/api/graphql', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ query: 'mutation { runDownloader(source: GHOSTESHOP) { id status } }' })
+        }).finally(() => {
+            $('#runGhostNowBtn').prop('disabled', false);
         });
     }
 
@@ -1650,25 +1815,36 @@
             // Downloader settings
             downloaderSettings = result['downloader'];
             if (downloaderSettings) {
-                $("#downloaderEnabledCheck").prop("checked", downloaderSettings['enabled']);
-                if (downloaderSettings['jackett']) {
-                    setInputVal("jackettUrlInput", downloaderSettings['jackett']['url'] || '');
+                torrents = downloaderSettings['torrents'] || {};
+                $("#torrentsEnabledCheck").prop("checked", torrents['enabled']);
+                if (torrents['jackett']) {
+                    setInputVal("jackettUrlInput", torrents['jackett']['url'] || '');
                     setInputVal("jackettApiKeyInput", '');
                 }
-                if (downloaderSettings['qbittorrent']) {
-                    setInputVal("qbtUrlInput", downloaderSettings['qbittorrent']['url'] || '');
-                    setInputVal("qbtUsernameInput", downloaderSettings['qbittorrent']['username'] || '');
+                if (torrents['qbittorrent']) {
+                    setInputVal("qbtUrlInput", torrents['qbittorrent']['url'] || '');
+                    setInputVal("qbtUsernameInput", torrents['qbittorrent']['username'] || '');
                     setInputVal("qbtPasswordInput", '');
-                    setInputVal("qbtCategoryInput", downloaderSettings['qbittorrent']['category'] || '');
-                    setInputVal("qbtSavePathInput", downloaderSettings['qbittorrent']['save_path'] || '');
+                    setInputVal("qbtCategoryInput", torrents['qbittorrent']['category'] || '');
+                    setInputVal("qbtSavePathInput", torrents['qbittorrent']['save_path'] || '');
                 }
-                if (downloaderSettings['filters']) {
-                    setInputVal("dlMinSeedersInput", downloaderSettings['filters']['min_seeders']);
-                    setInputVal("dlPreferredExtInput", (downloaderSettings['filters']['preferred_ext'] || []).join(', '));
-                    setInputVal("dlMaxSizeGbInput", downloaderSettings['filters']['max_size_gb']);
-                    setInputVal("dlIndexersInput", (downloaderSettings['filters']['indexers'] || []).join(', '));
+                if (torrents['filters']) {
+                    setInputVal("dlMinSeedersInput", torrents['filters']['min_seeders']);
+                    setInputVal("dlPreferredExtInput", (torrents['filters']['preferred_ext'] || []).join(', '));
+                    setInputVal("dlMaxSizeGbInput", torrents['filters']['max_size_gb']);
+                    setInputVal("dlIndexersInput", (torrents['filters']['indexers'] || []).join(', '));
                 }
-                setInputVal("dlIntervalInput", downloaderSettings['interval'] || '1h');
+                setInputVal("dlIntervalInput", torrents['interval'] || '1h');
+
+                ghost = downloaderSettings['ghosteshop'] || {};
+                $("#ghostEnabledCheck").prop("checked", ghost['enabled']);
+                setInputVal("ghostUrlInput", ghost['url'] || 'https://pro.nlib.cc');
+                setInputVal("ghostUsernameInput", ghost['username'] || '');
+                setInputVal("ghostPasswordInput", '');
+                setInputVal("ghostLanguageInput", ghost['language'] || 'en');
+                setInputVal("ghostLibraryPathInput", ghost['library_path'] || '');
+                setInputVal("ghostIntervalInput", ghost['interval'] || '24h');
+                $("#ghostVerifySslCheck").prop("checked", ghost['verify_ssl']);
             }
 
             // Shop settings

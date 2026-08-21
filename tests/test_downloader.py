@@ -256,8 +256,8 @@ def make_job(library, monkeypatch, search_results):
     monkeypatch.setattr(downloader_lib.jackett, 'search', fake_search)
     monkeypatch.setattr(downloader_lib.qbittorrent, 'QbittorrentClient',
                         lambda settings: fake_qbt)
-    monkeypatch.setattr(downloader_lib, 'is_configured', lambda s: True)
-    settings = {'downloader': {'filters': dict(FILTERS), 'qbittorrent': {}}}
+    monkeypatch.setattr(downloader_lib, 'torrents_configured', lambda s: True)
+    settings = {'downloader': {'torrents': {'filters': dict(FILTERS), 'qbittorrent': {}}}}
     calls['qbt'] = fake_qbt
     return settings, calls
 

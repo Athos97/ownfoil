@@ -5,8 +5,9 @@
     <div class="d-flex align-items-start">
         <div>
             <h2>Downloads</h2>
-            <p class="text-secondary">Updates and DLCs the downloader is fetching through
-                qBittorrent. A row completes when the library has identified the file.</p>
+            <p class="text-secondary">Content the downloader is fetching - torrents via
+                qBittorrent, direct transfers from Ghost eShop. A row completes when the
+                library has identified the file.</p>
         </div>
         <div class="ms-auto">
             <button type="button" id="runDownloaderBtn" class="btn btn-primary"
@@ -58,7 +59,7 @@
 
     const RUN_MUTATION = `
         mutation Run {
-            runDownloader { id status }
+            runDownloader(source: TORRENTS) { id status }
         }`;
 
     let downloads = {};   // id -> download
@@ -138,7 +139,9 @@
         };
         const spinner = d.status === 'downloading'
             ? ' <span class="spinner-border spinner-border-sm" role="status"></span>' : '';
-        return `<span class="badge ${map[d.status] || 'text-bg-secondary'}">${d.status}${spinner}</span>`;
+        const pct = d.status === 'downloading' && d.progress != null
+            ? ` ${d.progress}%` : '';
+        return `<span class="badge ${map[d.status] || 'text-bg-secondary'}">${d.status}${pct}${spinner}</span>`;
     }
 
     function esc(s) {
@@ -172,10 +175,12 @@
         const cells = tr.children;
         const label = d.name || d.searchQuery || d.torrentName || d.titleId || d.appId;
         cells[0].children[0].textContent = label;
-        cells[0].children[1].textContent = d.appId || d.titleId || '';
+        cells[0].children[1].textContent = `${d.appId || d.titleId || ''} · ${d.source || 'torrents'}`;
         cells[1].innerHTML = d.appType === 'UPDATE'
             ? '<span class="badge text-bg-primary">UPDATE</span>'
-            : '<span class="badge text-bg-secondary">DLC</span>';
+            : d.appType === 'BASE'
+                ? '<span class="badge text-bg-success">BASE</span>'
+                : '<span class="badge text-bg-secondary">DLC</span>';
         cells[2].textContent = patchLevel(parseInt(d.appVersion) || 0);
         cells[3].textContent = d.torrentName || '—';
         cells[4].textContent = d.indexer || '—';

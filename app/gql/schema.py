@@ -10,13 +10,17 @@ from .docs import arg as _arg, described, described_field
 from .filters import AppFilter, AppType, FileFilter, OrderBy, TitleFilter
 from .mutations import Mutation
 from .resolvers import (
-    resolve_app, resolve_apps, resolve_downloads, resolve_file, resolve_files,
-    resolve_libraries, resolve_stats, resolve_task, resolve_tasks, resolve_title,
+    resolve_app, resolve_apps, resolve_downloads, resolve_downloader_status,
+    resolve_file, resolve_files, resolve_ghostshop_game, resolve_ghostshop_search,
+    resolve_jackett_search, resolve_libraries, resolve_missing_targets,
+    resolve_stats, resolve_task, resolve_tasks, resolve_title,
     resolve_titles, resolve_workers,
 )
 from .types import (
-    App, AppConnection, Download, DownloadStatus, File, FileConnection, Library,
-    LibraryStats, Task, TaskStatus, Title, TitleConnection, Worker,
+    App, AppConnection, Download, DownloadSource, DownloadStatus, File,
+    FileConnection, GhostshopGame, GhostshopSearchResult, JackettSearchResult,
+    Library, LibraryStats, MissingTarget, SourceStatus, Task, TaskStatus, Title,
+    TitleConnection, Worker,
 )
 
 
@@ -225,6 +229,49 @@ class Query:
         selected, so asking for one count does not pay for the others. File-level
         figures are admin only and read zero for other roles."""
         return resolve_stats(ctx=info.context, info=info)
+
+    @described_field
+    def missing_targets(self, info: Info) -> List[MissingTarget]:
+        """Latest-version updates and DLCs the library does not hold: the shared work
+        list both download sources draw from. Admin only; empty for any other role."""
+        return resolve_missing_targets(ctx=info.context, info=info)
+
+    @described_field
+    def downloader_status(self, info: Info) -> List[SourceStatus]:
+        """Configuration and schedule snapshot for each download source (torrents,
+        Ghost eShop). Admin only; empty for any other role."""
+        return resolve_downloader_status(ctx=info.context, info=info)
+
+    @described_field
+    def ghostshop_search(
+        self, info: Info,
+        query: Annotated[str, _arg("Free text to find games by name.")],
+        limit: Annotated[int, _arg("Maximum results, clamped to 1-50.")] = 20,
+    ) -> List[GhostshopSearchResult]:
+        """Text search over the Ghost eShop PRO catalog. Requires the Ghost eShop
+        source credentials; returns games (base ids), not files. Admin only."""
+        return resolve_ghostshop_search(query, limit, ctx=info.context, info=info)
+
+    @described_field
+    def ghostshop_game(
+        self, info: Info,
+        tid: Annotated[strawberry.ID, _arg("The game's base title id, 16 hex digits.")],
+    ) -> Optional[GhostshopGame]:
+        """One game family from the Ghost eShop catalog: base, every update and every
+        DLC it offers, each with its size and whether the library already holds it.
+        Admin only; null when the catalog does not know the game."""
+        return resolve_ghostshop_game(str(tid), ctx=info.context, info=info)
+
+    @described_field
+    def jackett_search(
+        self, info: Info,
+        query: Annotated[str, _arg("Free text to search trackers for.")],
+        limit: Annotated[int, _arg("Maximum results, clamped to 1-100.")] = 50,
+    ) -> List[JackettSearchResult]:
+        """Raw tracker search through Jackett for arbitrary text - the manual lane of
+        Add Content. Requires the Jackett credentials from the torrents source. Admin
+        only; empty when Jackett is not configured."""
+        return resolve_jackett_search(query, limit, ctx=info.context, info=info)
 
 
 # The deepest legitimate query the UI issues is roughly

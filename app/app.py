@@ -283,6 +283,18 @@ def downloads_page():
     return render_template('downloads.html', title='Downloads',
                            admin_account_created=admin_account_created())
 
+@app.route('/admin/update')
+@access_required('admin')
+def update_library_page():
+    return render_template('update.html', title='Update Library',
+                           admin_account_created=admin_account_created())
+
+@app.route('/admin/add-content')
+@access_required('admin')
+def add_content_page():
+    return render_template('add_content.html', title='Add Content',
+                           admin_account_created=admin_account_created())
+
 @app.route('/setup')
 def setup_page():
     """Setup page showing client information and connection instructions."""
@@ -349,8 +361,9 @@ def get_settings_api():
                 settings['shop']['clients'][client_name]['hauth'] = {}
     # Strip downloader secrets for privacy (don't send to client)
     if 'downloader' in settings:
-        settings['downloader'].get('jackett', {}).pop('api_key', None)
-        settings['downloader'].get('qbittorrent', {}).pop('password', None)
+        settings['downloader'].get('torrents', {}).get('jackett', {}).pop('api_key', None)
+        settings['downloader'].get('torrents', {}).get('qbittorrent', {}).pop('password', None)
+        settings['downloader'].get('ghosteshop', {}).pop('password', None)
     return jsonify(settings)
 
 @app.post('/api/settings/titles')
@@ -499,20 +512,29 @@ def set_worker_settings_api():
 def set_downloader_settings_api():
     from utils import interval_string_to_timedelta
     data = request.json or {}
-    interval_str = data.get('interval')
 
-    if interval_str is not None:
-        is_valid, error_msg = validate_interval_string(interval_str)
-        if not is_valid:
-            return jsonify({
-                'success': False,
-                'errors': [{'path': 'downloader/interval', 'error': error_msg}]
-            })
+    # Validate whichever per-source intervals the form carries.
+    for source in ('torrents', 'ghosteshop'):
+        interval_str = (data.get(source) or {}).get('interval')
+        if interval_str is not None:
+            is_valid, error_msg = validate_interval_string(interval_str)
+            if not is_valid:
+                return jsonify({
+                    'success': False,
+                    'errors': [{'path': f'downloader/{source}/interval', 'error': error_msg}]
+                })
 
     # An empty secret means "keep the current one", not "erase it"
-    for section, key in (('jackett', 'api_key'), ('qbittorrent', 'password')):
-        if data.get(section, {}).get(key) == '':
-            data.setdefault(section, {}).pop(key)
+    for section, key in (('torrents', 'api_key'), ('torrents', 'password'),
+                         ('ghosteshop', 'password')):
+        block = data.get(section)
+        if isinstance(block, dict):
+            # jackett.api_key lives one level deeper than the qbt/ghost passwords
+            if key == 'api_key':
+                if block.get('jackett', {}).get(key) == '':
+                    data[section]['jackett'].pop(key)
+            elif block.get(key) == '':
+                data[section].pop(key)
 
     set_downloader_settings(data)
     tasks_mod.arm_downloader_schedule()
@@ -522,28 +544,34 @@ def set_downloader_settings_api():
 @app.post('/api/settings/downloader/test')
 @access_required('admin')
 def test_downloader_api():
-    """Test Jackett/qBittorrent connectivity with the form values over the saved ones."""
+    """Test source connectivity with the form values over the saved ones."""
     import copy
     import jackett
     import qbittorrent
+    import ghostshop
     settings = copy.deepcopy(get_settings())
     data = request.json or {}
     for section, values in data.items():
         if isinstance(values, dict):
             settings['downloader'].setdefault(section, {}).update(values)
+    saved = get_settings()['downloader']
     # Empty secrets in the form mean "use the saved one"
-    jackett_settings = settings['downloader']['jackett']
-    qbt_settings = settings['downloader']['qbittorrent']
-    if jackett_settings.get('api_key') == '':
-        jackett_settings['api_key'] = get_settings()['downloader']['jackett'].get('api_key', '')
-    if qbt_settings.get('password') == '':
-        qbt_settings['password'] = get_settings()['downloader']['qbittorrent'].get('password', '')
+    torrents = settings['downloader']['torrents']
+    ghost = settings['downloader']['ghosteshop']
+    if torrents.get('jackett', {}).get('api_key') == '':
+        torrents['jackett']['api_key'] = saved.get('torrents', {}).get('jackett', {}).get('api_key', '')
+    if torrents.get('qbittorrent', {}).get('password') == '':
+        torrents['qbittorrent']['password'] = saved.get('torrents', {}).get('qbittorrent', {}).get('password', '')
+    if ghost.get('password') == '':
+        ghost['password'] = saved.get('ghosteshop', {}).get('password', '')
 
-    jackett_ok, jackett_msg = jackett.test_connection(settings['downloader']['jackett'])
-    qbt_ok, qbt_msg = qbittorrent.test_connection(settings['downloader']['qbittorrent'])
+    jackett_ok, jackett_msg = jackett.test_connection(torrents['jackett'])
+    qbt_ok, qbt_msg = qbittorrent.test_connection(torrents['qbittorrent'])
+    ghost_ok, ghost_msg = ghostshop.test_connection(ghost)
     return jsonify({
         'jackett': {'success': jackett_ok, 'message': jackett_msg},
         'qbittorrent': {'success': qbt_ok, 'message': qbt_msg},
+        'ghosteshop': {'success': ghost_ok, 'message': ghost_msg},
     })
 
 

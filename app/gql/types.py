@@ -168,10 +168,21 @@ class DownloadStatus(Enum):
                               "the torrent. Cleared by `retryDownload` or deletion.")
 
 
+@described(strawberry.enum)
+class DownloadSource(Enum):
+    """Which lane a download row belongs to. Each source schedules, retries and
+    reports its own rows; the (app id, version) target uniqueness keeps the two
+    from ever racing for the same content."""
+    TORRENTS = strawberry.enum_value(
+        "torrents", description="Jackett search handed to qBittorrent.")
+    GHOSTESHOP = strawberry.enum_value(
+        "ghosteshop", description="Direct chunked download from Ghost eShop PRO.")
+
+
 @described(strawberry.type)
 class Download:
-    """One update or DLC the downloader has picked a torrent for. One row per
-    (app id, version) target - retries replace the row rather than stacking.
+    """One base, update or DLC the downloader has picked a transfer for. One row
+    per (app id, version) target - retries replace the row rather than stacking.
     The whole type is admin only, like everything downloader-shaped."""
     id: strawberry.ID = desc("Primary key of the download row.")
     title_id: str = desc("The 16-hex-digit id of the game the target belongs to.")
@@ -180,8 +191,8 @@ class Download:
     app_version: int = desc("The target's version, as Nintendo counts it. Stored as "
                             "text in the database and cast on the way out; the patch "
                             "level humans read is this divided by 65536.")
-    app_type: AppType = desc("What kind of content the target is - always UPDATE or "
-                             "DLC here, since bases are never download targets.")
+    app_type: AppType = desc("What kind of content the target is - UPDATE or DLC for "
+                             "missing-content scans, BASE for Add Content picks.")
     name: Optional[str] = desc("Display name: the game's name for an update, the "
                                "DLC's own name for a DLC. Null when titledb does not "
                                "know either.", default=None)
@@ -189,21 +200,29 @@ class Download:
                                        "target.", default=None)
     torrent_hash: Optional[str] = desc("The chosen torrent's infohash, lowercase - "
                                        "null while the row is `queued` with only a "
-                                       "name to match on.", default=None)
-    torrent_name: Optional[str] = desc("The Jackett result title that was picked.",
-                                       default=None)
+                                       "name to match on, and always null for Ghost "
+                                       "eShop rows.", default=None)
+    torrent_name: Optional[str] = desc("The file name the transfer saves as - the "
+                                       "Jackett result title, or the Ghost eShop "
+                                       "catalog entry.", default=None)
     indexer: Optional[str] = desc("The tracker the torrent came from, as Jackett "
-                                  "reports it.", default=None)
-    size: Optional[BigInt] = desc("The torrent's size in bytes. A 64-bit scalar, "
+                                  "reports it, or 'Ghost eShop'.", default=None)
+    size: Optional[BigInt] = desc("The transfer's size in bytes. A 64-bit scalar, "
                                   "because game files routinely exceed the 2^31 a "
                                   "GraphQL `Int` can carry.", default=None)
     seeders: Optional[int] = desc("How many seeders the result advertised when it was "
-                                  "picked.", default=None)
+                                  "picked. Null for Ghost eShop rows.", default=None)
+    source: Optional[DownloadSource] = desc(
+        "Which lane owns the row. Null on rows written before sources existed - "
+        "treat those as torrents.", default=None)
+    progress: Optional[int] = desc("Transfer percentage 0-100 while `downloading`. "
+                                   "Null when the source does not report one.",
+                                   default=None)
     status: DownloadStatus = desc("Where the download stands.")
     error: Optional[str] = desc("Why it failed, when it did. Null otherwise.",
                                 default=None)
-    created_at: Optional[str] = desc("When the target was first handed to "
-                                     "qBittorrent, ISO 8601.", default=None)
+    created_at: Optional[str] = desc("When the target was first handed to a source, "
+                                     "ISO 8601.", default=None)
     updated_at: Optional[str] = desc("When the row last changed status, ISO 8601.",
                                      default=None)
 
@@ -216,6 +235,89 @@ class AppTypeCount:
     key: str = desc("The app type grouped on: `BASE`, `UPDATE` or `DLC`.")
     count: int = desc("App rows of this type, owned or not.")
     owned: int = desc("How many of them are backed by at least one file.", default=0)
+
+
+@described(strawberry.type)
+class MissingTarget:
+    """One latest-version update or DLC the library does not hold - the shared work
+    list both download sources draw from. Admin only."""
+    title_id: str = desc("The 16-hex-digit id of the game the target belongs to.")
+    app_id: str = desc("The target's own application id.")
+    app_version: int = desc("The missing version, as Nintendo counts it.")
+    app_type: AppType = desc("UPDATE or DLC - bases never appear as missing targets.")
+    name: Optional[str] = desc("Display name from titledb, null when unknown.",
+                               default=None)
+    patch_level: int = desc("The version humans read (`appVersion` / 65536).",
+                            default=0)
+
+
+@described(strawberry.type)
+class SourceStatus:
+    """Configuration and schedule snapshot for one download source. Admin only."""
+    source: DownloadSource = desc("Which source this describes.")
+    configured: bool = desc("Enabled, with every credential it needs. A source that "
+                            "is not configured runs neither on schedule nor on "
+                            "demand.", default=False)
+    enabled: bool = desc("The enabled switch as saved - on with missing credentials "
+                         "still reads configured=false.", default=False)
+    interval: Optional[str] = desc("The schedule interval as configured, e.g. '1h'.",
+                                   default=None)
+    next_run: Optional[str] = desc("When the scheduled pass fires next, ISO 8601. "
+                                   "Null when nothing is scheduled.", default=None)
+
+
+@described(strawberry.type)
+class GhostshopCatalogEntry:
+    """One file the Ghost eShop catalog offers for a game, with local ownership
+    already resolved. Admin only."""
+    name: str = desc("The catalog file name - the exact key used to request the "
+                     "download.")
+    tid: str = desc("The entry's 16-hex-digit title id.")
+    category: AppType = desc("BASE, UPDATE or DLC.")
+    version: int = desc("The entry's version; 0 for versionless DLCs.", default=0)
+    size: Optional[BigInt] = desc("Bytes, as the catalog reports them.", default=None)
+    owned: bool = desc("The library already holds this exact version.", default=False)
+
+
+@described(strawberry.type)
+class GhostshopGame:
+    """One game family as Ghost eShop knows it. Admin only."""
+    title: str = desc("The game's name in the requested language.")
+    base_tid: str = desc("The family's base title id.")
+    entries: List[GhostshopCatalogEntry] = desc(
+        "Every file the catalog offers: base, all updates, all DLCs.", default_factory=list)
+
+
+@described(strawberry.type)
+class GhostshopSearchResult:
+    """One game found by the Ghost eShop text search. Admin only."""
+    tid: str = desc("The game's base title id.")
+    title: str = desc("The game's name in the requested language.")
+
+
+@described(strawberry.type)
+class JackettSearchResult:
+    """One torrent Jackett found for an arbitrary query. Admin only. These are raw
+    tracker results, not matched to any library target."""
+    title: str = desc("The tracker's release name.")
+    download_url: str = desc("Magnet URI or Jackett link with the API key baked in.")
+    seeders: int = desc("Seeders at search time.", default=0)
+    leechers: int = desc("Leechers at search time.", default=0)
+    size: Optional[BigInt] = desc("The torrent's size in bytes.", default=None)
+    indexer: Optional[str] = desc("The tracker it came from.", default=None)
+    publish_date: Optional[str] = desc("First-seen date as the tracker reports it.",
+                                       default=None)
+
+
+@described(strawberry.input)
+class QueuedDownloadInput:
+    """One entry chosen in Add Content to queue for Ghost eShop."""
+    title_id: str = desc("The family's base title id.")
+    app_id: str = desc("The entry's own application id.")
+    app_version: int = desc("The entry's version.")
+    app_type: AppType = desc("BASE, UPDATE or DLC.")
+    name: str = desc("Display name for the queue row.")
+    file_name: str = desc("The catalog file name to download.")
 
 
 @described(strawberry.type)
@@ -234,6 +336,21 @@ class VerificationStatusCount:
     status: VerificationStatus = desc("The verdict this bucket groups on.")
     count: int = desc("How many files carry it.")
     size: BigInt = desc("Total bytes of the files in this bucket.", default=0)
+
+
+@described(strawberry.type)
+class UnidentifiedFile:
+    """One file ownfoil could not identify, with the reason it last failed - the
+    detail behind the stats `unidentifiedFiles` count. Admin only."""
+    filename: str = desc("File name with extension, no directory part.")
+    error: Optional[str] = desc("The last identification error, null when the file "
+                                "was never attempted.", default=None)
+    attempts: int = desc("How many identification attempts were made.",
+                         default=0)
+    size: Optional[BigInt] = desc("Size in bytes as last seen on disk.",
+                                  default=None)
+    last_attempt: Optional[str] = desc("When identification last ran on it, ISO 8601.",
+                                       default=None)
 
 
 @described(strawberry.type)
@@ -279,8 +396,13 @@ class LibraryStats:
         "`UNVERIFIED` last. Always all seven buckets, empty ones included - the set is "
         "closed, and `CORRUPT: 0` says something a missing bucket does not. Note "
         "`SIGNATURE_OK` and `SIGNATURE_FAILED` can only be non-zero while verification "
-        "runs at `signature` depth. Admin only; null for any other role.", default=None)
-
+        "runs at `signature` depth. Admin only; null for any other role.",
+        default=None)
+    unidentified_files_detail: Optional[List[UnidentifiedFile]] = desc(
+        "The files behind `unidentifiedFiles`, each with the error that last failed "
+        "it - typically truncated downloads or a keys file missing the title's master "
+        "key. Capped to the 200 oldest. Admin only; null for any other role.",
+        default=None)
 
 @described(strawberry.type)
 class File:

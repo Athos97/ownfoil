@@ -25,7 +25,10 @@ from constants import COMPRESS_EXT
 
 from .docs import described, described_mutation
 from .resolvers import resolve_task, resolve_title
-from .types import AppType, Download, DownloadStatus, Task, Title
+from .types import (
+    AppType, Download, DownloadSource, DownloadStatus, QueuedDownloadInput,
+    Task, Title,
+)
 
 
 class NotAuthorized(Exception):
@@ -238,18 +241,89 @@ class Mutation:
         return bool(ok)
 
     @described_mutation
-    def run_downloader(self, info: Info) -> Optional[Task]:
-        """Run a downloader pass now: sync download statuses against qBittorrent,
-        compute missing updates/DLCs, and queue a torrent for each. A no-op when the
-        downloader is not configured; progress and cancellation behave like any
-        other task. Runs independently of the periodic schedule - it does not reset
-        or wait for the next scheduled pass."""
+    def run_downloader(
+        self, info: Info,
+        source: Annotated[DownloadSource, strawberry.argument(
+            description="Which source to run: torrents (Jackett + qBittorrent) or "
+                        "ghosteshop (direct HTTP from Ghost eShop PRO).")],
+    ) -> Optional[Task]:
+        """Run one download source now: sync download statuses, compute missing
+        updates/DLCs, and fetch each through that source - torrents by handing the
+        best match to qBittorrent, Ghost eShop by direct chunked download into the
+        game's folder. Queued Add Content rows of that source are processed first.
+        A no-op when the source is not configured; progress and cancellation behave
+        like any other task. Runs independently of the periodic schedule - it does
+        not reset or wait for the next scheduled pass."""
         import tasks as tasks_mod
         _require_admin(info.context)
+        task_names = {
+            DownloadSource.TORRENTS: 'downloader_torrents_run',
+            DownloadSource.GHOSTESHOP: 'downloader_ghosteshop_run',
+        }
         # Distinct input from the scheduled row ({}), or the dedup in enqueue_task
         # would return that deferred row instead of starting work now.
-        task, _created = tasks_mod.enqueue_task('downloader_run', {'manual': True})
+        task, _created = tasks_mod.enqueue_task(
+            task_names[source], {'manual': True})
         return _task_by_id(task.id, info)
+
+    @described_mutation
+    def queue_ghosteshop_downloads(
+        self, info: Info,
+        entries: Annotated[list[QueuedDownloadInput], strawberry.argument(
+            description="The catalog entries chosen in Add Content. Bases, updates "
+                        "and DLCs alike: queued rows are downloaded whatever their "
+                        "type, unlike the periodic scan that only looks for missing "
+                        "updates/DLCs.")],
+    ) -> int:
+        """Queue catalog entries for the next Ghost eShop pass (or a manual run).
+        Returns the number of rows now queued - entries already owned or already
+        queued are skipped, and one row per (app id, version) target is kept."""
+        import downloader as downloader_lib
+        from db import get_download_by_app, is_app_owned
+        _require_admin(info.context)
+        queued = 0
+        for e in entries:
+            if is_app_owned(e.app_id, str(e.app_version)):
+                continue
+            if get_download_by_app(e.app_id, str(e.app_version)) is not None:
+                continue
+            downloader_lib.queue_ghosteshop_download(
+                title_id=e.title_id, app_id=e.app_id,
+                app_version=e.app_version, app_type=e.app_type.value,
+                name=e.name)
+            queued += 1
+        return queued
+
+    @described_mutation
+    def add_torrent(
+        self, info: Info,
+        download_url: Annotated[str, strawberry.argument(
+            description="Magnet URI or .torrent URL, exactly as the search result "
+                        "reported it.")],
+    ) -> bool:
+        """Hand one torrent to qBittorrent with the torrents source's save path and
+        category. The manual lane of Add Content: no download row is created, the
+        library picks the file up through the watcher like any other. False when
+        qBittorrent is not configured or rejected the torrent."""
+        import qbittorrent
+        from settings import get_settings
+        _require_admin(info.context)
+        torrents = get_settings().get('downloader', {}).get('torrents', {}) or {}
+        qbt_settings = torrents.get('qbittorrent', {}) or {}
+        if not qbt_settings.get('url'):
+            raise MutationFailed('qBittorrent is not configured.')
+        client = qbittorrent.QbittorrentClient(qbt_settings)
+        ok, err = client.login()
+        if not ok:
+            raise MutationFailed(f'qBittorrent login failed: {err}')
+        ok, add_err, _hash = client.add_torrent(
+            download_url,
+            save_path=qbt_settings.get('save_path') or None,
+            category=qbt_settings.get('category') or None,
+        )
+        if not ok:
+            raise MutationFailed(add_err or 'qBittorrent rejected the torrent.')
+        return True
 
     @described_mutation
     def retry_download(
@@ -257,9 +331,11 @@ class Mutation:
         id: Annotated[strawberry.ID, strawberry.argument(
             description="Primary key of the failed download to retry.")],
     ) -> Optional[Download]:
-        """Re-search a failed download from scratch and hand the best new result to
-        qBittorrent. The old row is deleted and replaced, keeping one row per
-        (app id, version) target. Null when the row vanished mid-retry."""
+        """Re-run a failed download from scratch through its own source: a torrents
+        row is re-searched on Jackett and handed to qBittorrent, a Ghost eShop row
+        is downloaded again (resuming any partial file). The old row keeps its place
+        - one row per (app id, version) target. Null when the row vanished
+        mid-retry."""
         import downloader as downloader_lib
         from db import get_download_by_app, get_download_by_id
         from settings import get_settings
@@ -270,11 +346,15 @@ class Mutation:
         app_id, app_version = download.app_id, str(download.app_version)
         ok, _msg = downloader_lib.retry_download(int(id), get_settings())
         if not ok:
-            raise MutationFailed("No matching torrent found on retry")
+            raise MutationFailed("Retry found nothing downloadable")
         row = get_download_by_app(app_id, app_version)
         if row is None:
             return None
         from .resolvers import _iso, _version_or_zero
+        try:
+            source = DownloadSource(row.source) if row.source else None
+        except ValueError:
+            source = DownloadSource.TORRENTS
         return Download(
             id=strawberry.ID(str(row.id)),
             title_id=row.title_id or "",
@@ -289,6 +369,8 @@ class Mutation:
             indexer=row.indexer,
             size=row.size,
             seeders=row.seeders,
+            source=source,
+            progress=row.progress,
             status=DownloadStatus(row.status or 'queued'),
             error=row.error,
             created_at=_iso(row.created_at),
