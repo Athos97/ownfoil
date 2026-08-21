@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% include 'nav.html' %}
+<div id="content" class="container mt-3">
+
+    <div id="gameHeader" class="row g-3 mb-4"></div>
+
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <h4><i class="bi bi-disc"></i> Base game</h4>
+            <div class="card mb-3"><div class="card-body p-0" id="baseSection"></div></div>
+
+            <h4><i class="bi bi-arrow-down-circle"></i> Updates</h4>
+            <div class="card mb-3"><div class="card-body p-0" id="updatesSection"></div></div>
+        </div>
+        <div class="col-lg-6">
+            <h4><i class="bi bi-box-seam"></i> DLCs</h4>
+            <div class="card mb-3"><div class="card-body p-0" id="dlcSection"></div></div>
+        </div>
+    </div>
+
+    <p class="text-secondary fst-italic" id="gameEmpty">Loading…</p>
+</div>
+
+<script src="{{ url_for('static', filename='js/format.js') }}"></script>
+{% if current_user.is_authenticated and current_user.is_admin %}
+<script src="{{ url_for('static', filename='js/realtime.js') }}"></script>
+{% endif %}
+<script>
+    const TITLE_ID = {{ title_id | tojson }};
+    const IS_ADMIN = {{ 'true' if current_user.is_authenticated and current_user.is_admin else 'false' }};
+
+    const TITLE_QUERY = `
+        query Game($tid: ID!) {
+            title(titleId: $tid) {
+                titleId
+                name
+                bannerUrl
+                iconUrl
+                frontBoxArt
+                releaseDate
+                publisher
+                developer
+                size
+                ownership { haveBase upToDate complete }
+                apps {
+                    appId appType appVersion owned blacklisted releaseDate
+                    titledb { name iconUrl }
+                    files { filename size addedAt }
+                }
+                availableDlc { appId version blacklisted titledb { name iconUrl } }
+            }
+        }`;
+
+    const BLACKLIST_MUTATION = `
+        mutation Bl($appId: ID!, $note: String) { blacklistApp(appId: $appId, note: $note) }`;
+    const UNBLACKLIST_MUTATION = `
+        mutation Unbl($appId: ID!) { unblacklistApp(appId: $appId) }`;
+
+    async function gqlSend(query, variables) {
+        const r = await fetch('/api/graphql', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify({query: query, variables: variables || {}}),
+        });
+        if (!r.ok) throw new Error(`GraphQL HTTP ${r.status}`);
+        const body = await r.json();
+        if (body.errors && body.errors.length) {
+            throw new Error('GraphQL errors: ' + JSON.stringify(body.errors));
+        }
+        return body.data;
+    }
+
+    function esc(s) {
+        return String(s ?? '').replace(/[&<>"']/g,
+            c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+    }
+
+    function patchLevel(v) { return Math.floor((v || 0) / 65536); }
+
+    function statusBadge(ok, okText, badText) {
+        return `<span class="badge ${ok ? 'text-bg-success' : 'text-bg-warning'}">${
+            ok ? okText : badText}</span>`;
+    }
+
+    function row(inner) {
+        return `<div class="d-flex align-items-center px-3 py-2 border-bottom">${inner}</div>`;
+    }
+
+    // --- header ---
+
+    function renderHeader(t) {
+        const ownership = t.ownership || {};
+        const name = t.name || 'Unrecognized';
+        const html = `
+            <div class="col-md-4">
+                <div class="card text-bg-dark">
+                    <img class="card-img" src="${esc(t.bannerUrl || '//placehold.it/400x200')}">
+                    <div class="card-img-overlay" style="background: linear-gradient(to top, rgba(0,0,0,.85), transparent 65%);">
+                        <h3 class="card-title position-absolute bottom-0 start-0 p-3 mb-0">${esc(name)}</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-8">
+                <dl class="row mb-2 small">
+                    <dt class="col-sm-3">Title ID</dt><dd class="col-sm-9 font-monospace">${esc(t.titleId)}</dd>
+                    ${t.publisher ? `<dt class="col-sm-3">Publisher</dt><dd class="col-sm-9">${esc(t.publisher)}</dd>` : ''}
+                    ${t.developer ? `<dt class="col-sm-3">Developer</dt><dd class="col-sm-9">${esc(t.developer)}</dd>` : ''}
+                    ${t.releaseDate ? `<dt class="col-sm-3">Released</dt><dd class="col-sm-9">${esc(t.releaseDate)}</dd>` : ''}
+                    ${t.size ? `<dt class="col-sm-3">Catalog size</dt><dd class="col-sm-9">${formatBytes(parseInt(t.size) || 0)}</dd>` : ''}
+                </dl>
+                <div class="d-flex gap-2 flex-wrap">
+                    ${statusBadge(ownership.haveBase, 'Base game owned', 'Base missing')}
+                    ${statusBadge(ownership.upToDate, 'Up to date', 'Update available')}
+                    ${statusBadge(ownership.complete, 'All DLCs owned', 'DLCs missing')}
+                </div>
+            </div>`;
+        document.getElementById('gameHeader').innerHTML = html;
+    }
+
+    // --- sections ---
+
+    function fileSummary(app) {
+        const files = app.files || [];
+        if (!files.length) return '—';
+        return files.map(f =>
+            `${esc(f.filename)} · ${formatBytes(f.size || 0)}`).join('<br>');
+    }
+
+    function renderBase(t) {
+        const el = document.getElementById('baseSection');
+        const base = (t.apps || []).find(a => a.appType === 'BASE');
+        if (!base) {
+            el.innerHTML = row('<div class="text-secondary fst-italic">Not in your library.</div>');
+            return;
+        }
+        el.innerHTML = row(`
+            <div class="flex-grow-1">
+                <div>${statusBadge(base.owned, 'Owned', 'Missing')}</div>
+                <div class="text-secondary small mt-1">${fileSummary(base)}</div>
+            </div>
+            <div class="text-secondary small text-end font-monospace">${esc(base.appId)}</div>`);
+    }
+
+    function renderUpdates(t) {
+        const el = document.getElementById('updatesSection');
+        const updates = (t.apps || []).filter(a => a.appType === 'UPDATE')
+            .sort((a, b) => b.appVersion - a.appVersion);
+        if (!updates.length) {
+            el.innerHTML = row('<div class="text-secondary fst-italic">No updates known.</div>');
+            return;
+        }
+        const highest = updates[0].appVersion;
+        el.innerHTML = updates.map(u => row(`
+            <div class="flex-grow-1">
+                <span class="fw-semibold">v${patchLevel(u.appVersion)}</span>
+                <span class="text-secondary small ms-2">${esc(u.releaseDate || '')}</span>
+                ${u.appVersion === highest ? '<span class="badge text-bg-info ms-2">latest</span>' : ''}
+                ${u.blacklisted ? '<span class="badge text-bg-dark ms-2" title="Blacklisted"><i class="bi bi-slash-circle"></i> blacklisted</span>' : ''}
+            </div>
+            <div>${statusBadge(u.owned, 'Owned', 'Missing')}
+                <span class="text-secondary small ms-2">${u.owned ? fileSummary(u) : ''}</span>
+            </div>`)).join('');
+    }
+
+    function renderDlcs(t) {
+        const el = document.getElementById('dlcSection');
+        // Merge: owned/tracked DLC apps + titledb-known DLCs without an app row.
+        const seen = new Set();
+        const items = [];
+        for (const a of (t.apps || []).filter(a => a.appType === 'DLC')) {
+            seen.add(a.appId);
+            items.push({
+                appId: a.appId,
+                name: (a.titledb && a.titledb.name) || a.appId,
+                iconUrl: a.titledb && a.titledb.iconUrl,
+                owned: a.owned,
+                version: a.appVersion,
+                blacklisted: a.blacklisted,
+                files: a.files,
+            });
+        }
+        for (const d of (t.availableDlc || [])) {
+            if (seen.has(d.appId)) continue;
+            items.push({
+                appId: d.appId,
+                name: (d.titledb && d.titledb.name) || d.appId,
+                iconUrl: d.titledb && d.titledb.iconUrl,
+                owned: false,
+                version: d.version || 0,
+                blacklisted: d.blacklisted,
+                files: [],
+            });
+        }
+        if (!items.length) {
+            el.innerHTML = row('<div class="text-secondary fst-italic">No DLCs known.</div>');
+            return;
+        }
+        items.sort((a, b) => (a.owned === b.owned ? a.name.localeCompare(b.name) : (a.owned ? -1 : 1)));
+        el.innerHTML = items.map(d => row(`
+            <div class="flex-grow-1 d-flex align-items-center gap-2">
+                ${d.iconUrl ? `<img src="${esc(d.iconUrl)}" style="width: 2.2rem; height: 2.2rem;" class="rounded">` : ''}
+                <div>
+                    <div class="fw-semibold">${esc(d.name)}</div>
+                    <div class="text-secondary small font-monospace">${esc(d.appId)}</div>
+                    ${d.owned && d.files && d.files.length
+                        ? `<div class="text-secondary small">${fileSummary(d)}</div>` : ''}
+                </div>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                ${d.blacklisted
+                    ? '<span class="badge text-bg-dark" title="Excluded from missing content"><i class="bi bi-slash-circle"></i> blacklisted</span>'
+                    : statusBadge(d.owned, 'Owned', 'Missing')}
+                ${IS_ADMIN ? `<button type="button" class="icon-btn dlc-bl"
+                    data-id="${esc(d.appId)}" data-bl="${d.blacklisted ? '1' : ''}"
+                    title="${d.blacklisted ? 'Take off the blacklist' : 'Blacklist: stop counting as missing'}">
+                    <i class="bi ${d.blacklisted ? 'bi-slash-circle' : 'bi-slash-circle'}"></i>
+                </button>` : ''}
+            </div>`)).join('');
+    }
+
+    document.getElementById('dlcSection').addEventListener('click', async e => {
+        const btn = e.target.closest('.dlc-bl');
+        if (!btn) return;
+        btn.disabled = true;
+        try {
+            if (btn.dataset.bl) {
+                await gqlSend(UNBLACKLIST_MUTATION, {appId: btn.dataset.id});
+            } else {
+                const note = prompt('Note (optional):') || null;
+                await gqlSend(BLACKLIST_MUTATION, {appId: btn.dataset.id, note: note});
+            }
+            loadGame();
+        } catch (err) {
+            console.error(err);
+            btn.disabled = false;
+        }
+    });
+
+    async function loadGame() {
+        let title;
+        try {
+            title = (await gqlSend(TITLE_QUERY, {tid: TITLE_ID})).title;
+        } catch (e) {
+            console.error(e);
+            document.getElementById('gameEmpty').textContent = 'Failed to load the game.';
+            return;
+        }
+        if (!title) {
+            document.getElementById('gameEmpty').textContent = 'Unknown title id.';
+            return;
+        }
+        document.getElementById('gameEmpty').classList.add('d-none');
+        renderHeader(title);
+        renderBase(title);
+        renderUpdates(title);
+        renderDlcs(title);
+    }
+
+    loadGame();
+
+</script>
+{% endblock %}

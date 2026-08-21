@@ -17,40 +17,6 @@
                     <ul class="dropdown-menu">
                         <li>
                             <div class="dropdown-item">
-                                <div class="btn-group w-100" role="group" aria-label="Type filter">
-                                    <input type="radio" class="btn-check type-toggle" name="typeFilter" id="typeAll" autocomplete="off" checked>
-                                    <label class="btn btn-outline-primary" for="typeAll">All</label>
-
-                                    <input type="radio" class="btn-check type-toggle" name="typeFilter" id="typeBase" autocomplete="off">
-                                    <label class="btn btn-outline-primary" for="typeBase">Base</label>
-
-                                    <input type="radio" class="btn-check type-toggle" name="typeFilter" id="typeDlc" autocomplete="off">
-                                    <label class="btn btn-outline-primary" for="typeDlc">DLC</label>
-                                </div>
-                            </div>
-                        </li>
-                        <li>
-                            <hr class="dropdown-divider">
-                        </li>
-                        <li>
-                            <div class="dropdown-item">
-                                <div class="btn-group w-100" role="group" aria-label="Ownership filter">
-                                    <input type="radio" class="btn-check ownership-toggle" name="ownershipFilter" id="ownershipAll" autocomplete="off" checked>
-                                    <label class="btn btn-outline-primary" for="ownershipAll">All</label>
-
-                                    <input type="radio" class="btn-check ownership-toggle" name="ownershipFilter" id="ownershipOwned" autocomplete="off">
-                                    <label class="btn btn-outline-primary" for="ownershipOwned">Owned</label>
-
-                                    <input type="radio" class="btn-check ownership-toggle" name="ownershipFilter" id="ownershipMissing" autocomplete="off">
-                                    <label class="btn btn-outline-primary" for="ownershipMissing">Missing</label>
-                                </div>
-                            </div>
-                        </li>
-                        <li>
-                            <hr class="dropdown-divider">
-                        </li>
-                        <li>
-                            <div class="dropdown-item">
                                 <div class="btn-group w-100" role="group" aria-label="Update filter">
                                     <input type="radio" class="btn-check update-toggle" name="updateFilter" id="updateAll" autocomplete="off" checked>
                                     <label class="btn btn-outline-primary" for="updateAll">All</label>
@@ -80,10 +46,6 @@
                                 </div>
                             </div>
                         </li>
-                        <!-- <div class="text-center m-2">
-                            <button id="btnApplyFilters" type="button" class="btn btn-primary" style="width: 85%;">Apply
-                                filters</button>
-                        </div> -->
                     </ul>
                 </div>
             </div>
@@ -156,9 +118,7 @@
     let fetchSeq = 0;    // guards against an older request answering after a newer one
     let searchDebounce;
 
-    // Active filters
-    let activeTypeFilter = "";
-    let activeOwnershipFilter = "";
+    // Active filters - per game: update currency and DLC completion.
     let activeUpdateFilter = "";
     let activeCompletionFilter = "";
 
@@ -189,53 +149,39 @@
         return body.data;
     }
 
-    // groupByAppId: one item per app id rather than per (app id, version), so a card
-    // is an item and `pageSize` really is the number of cards on the page.
+    // One card per game: the titles query drives the grid, so a family (base +
+    // updates + DLCs) is a single item and pageSize really is the number of cards.
+    // The owned:true driver means every card has its base; haveBase is implied.
     const CARDS_QUERY = `
-        query Cards($page: Int!, $pageSize: Int!, $appType: [AppType!], $search: String,
-                    $owned: Boolean, $upToDate: Boolean, $complete: Boolean) {
-            apps(groupByAppId: true, orderBy: {field: NAME}, page: $page, pageSize: $pageSize,
-                 appType: $appType, search: $search, owned: $owned,
-                 upToDate: $upToDate, complete: $complete) {
+        query Cards($page: Int!, $pageSize: Int!, $search: String,
+                    $upToDate: Boolean, $complete: Boolean) {
+            titles(owned: true, orderBy: {field: NAME}, page: $page, pageSize: $pageSize,
+                   search: $search, filter: {upToDate: $upToDate, complete: $complete}) {
                 total
                 items {
-                    appId
-                    appType
-                    owned
-                    titledb { name bannerUrl iconUrl }
-                    title { titleId name ownership { haveBase upToDate complete } }
-                    versions { version owned releaseDate }
+                    titleId
+                    name
+                    bannerUrl
+                    ownership { haveBase upToDate complete }
                 }
             }
         }`;
 
     const ICONS_QUERY = `
-        query Icons($page: Int!, $pageSize: Int!, $appType: [AppType!], $search: String,
-                    $owned: Boolean, $upToDate: Boolean, $complete: Boolean) {
-            apps(groupByAppId: true, orderBy: {field: NAME}, page: $page, pageSize: $pageSize,
-                 appType: $appType, search: $search, owned: $owned,
-                 upToDate: $upToDate, complete: $complete) {
+        query Icons($page: Int!, $pageSize: Int!, $search: String) {
+            titles(owned: true, orderBy: {field: NAME}, page: $page, pageSize: $pageSize,
+                   search: $search) {
                 total
-                items { appId titledb { iconUrl } }
+                items { titleId iconUrl }
             }
         }`;
 
     function queryVariables() {
-        let appType = null;
-        if (activeTypeFilter) {
-            appType = [activeTypeFilter];
-        } else if (currentView === 'icon') {
-            appType = ['BASE'];  // the icon wall is one icon per game, as it has always been
-        } else {
-            appType = ['BASE', 'DLC'];
-        }
         const search = ($('#textFilter').val() || '').trim();
         return {
             page: currentPage,
             pageSize: itemsPerPage,
-            appType: appType,
             search: search || null,
-            owned: activeOwnershipFilter ? activeOwnershipFilter === 'Owned' : null,
             upToDate: activeUpdateFilter ? activeUpdateFilter === 'Up to date' : null,
             complete: activeCompletionFilter ? activeCompletionFilter === 'Complete' : null,
         };
@@ -253,7 +199,7 @@
         }
         if (seq !== fetchSeq) return; // a newer request is already on its way back
 
-        totalItems = data.apps.total;
+        totalItems = data.titles.total;
         const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
         if (currentPage > totalPages) { // filters shrank the result under our feet
             currentPage = totalPages;
@@ -262,20 +208,16 @@
 
         $('#cardSizeRange').val(cardSize);
         if (isIcon) {
-            renderIconView(data.apps.items);
+            renderIconView(data.titles.items);
         } else {
-            lastCardGames = data.apps.items.map(cardModel);
+            lastCardGames = data.titles.items.map(cardModel);
             renderCardView(lastCardGames);
         }
         updatePaginationControls(totalPages);
 
-        // init version tooltips
+        // init tooltips
         const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]')
         const tooltipList = [...tooltipTriggerList].map(tooltipTriggerEl => new bootstrap.Tooltip(tooltipTriggerEl))
-
-        // init version popovers
-        const popoverTriggerList = document.querySelectorAll('[data-bs-toggle="popover"]')
-        const popoverList = [...popoverTriggerList].map(popoverTriggerEl => new bootstrap.Popover(popoverTriggerEl))
     }
 
     // Library-wide, so the line stays put while filters and search move the grid.
@@ -331,52 +273,21 @@
     }
 
     /**
-     * One card from one app. A BASE app speaks for its title: ownership and the update
-     * history come from the title, since a Switch update ships under its own app id.
-     * A DLC app speaks for itself, and is up to date when its highest known version is
-     * the one owned.
+     * One card from one title: the game as a unit. The three indicators are the
+     * title's own flags - base present, update current, DLC set complete - all
+     * blacklist-aware on the server side.
      */
-    function cardModel(app) {
-        const meta = app.titledb || {};
-        const title = app.title || {};
+    function cardModel(title) {
         const ownership = title.ownership || {haveBase: false, upToDate: false, complete: false};
-        const versions = (app.versions || []).map(v => ({
-            version: v.version,
-            owned: v.owned,
-            release_date: v.releaseDate || 'Unknown',
-        }));
-        const isBase = app.appType === 'BASE';
-        const recognized = isBase ? !!title.name : !!meta.name;
-
-        if (isBase) {
-            return {
-                id: recognized ? title.titleId : title.titleId + ' not found in titledb',
-                title_id_name: title.name || 'Unrecognized',
-                name: title.name || 'Unrecognized',
-                bannerUrl: meta.bannerUrl || PLACEHOLDER_BANNER,
-                iconUrl: meta.iconUrl || '',
-                app_type: 'BASE',
-                owned: ownership.haveBase,
-                has_latest_version: ownership.haveBase && ownership.upToDate,
-                has_all_dlcs: ownership.complete,
-                version: versions,
-                dl_key: title.titleId,
-            };
-        }
-
-        const ownedVersions = versions.filter(v => v.owned).map(v => v.version);
-        const highest = versions.length ? Math.max(...versions.map(v => v.version)) : 0;
+        const name = title.name || 'Unrecognized';
         return {
-            id: recognized ? app.appId : app.appId + ' not found in titledb',
-            title_id_name: title.name || 'Unrecognized',
-            name: meta.name || 'Unrecognized',
-            bannerUrl: meta.bannerUrl || PLACEHOLDER_BANNER,
-            iconUrl: meta.iconUrl || '',
-            app_type: app.appType,
-            owned: app.owned,
-            has_latest_version: ownedVersions.length > 0 && Math.max(...ownedVersions) >= highest,
-            version: versions,
-            dl_key: app.appId,
+            title_id: title.titleId,
+            name: name,
+            bannerUrl: title.bannerUrl || PLACEHOLDER_BANNER,
+            owned: ownership.haveBase,
+            has_latest_version: ownership.haveBase && ownership.upToDate,
+            has_all_dlcs: ownership.complete,
+            dl_key: title.titleId,
         };
     }
 
@@ -387,56 +298,48 @@
         games.forEach(function (game) {
             const gameCol = $('<div class="col game-col"></div>').addClass(cardColumnClasses());
 
-            const card = $('<div class="card text-bg-dark game-card"></div>');
+            const card = $('<a class="card text-bg-dark game-card text-decoration-none"></a>')
+                .attr('href', `/game/${game.title_id}`);
 
             const img = $('<img class="card-img"></img>').attr('src', game.bannerUrl);
             card.append(img);
 
             const cardOverlay = $('<div class="card-img-overlay game-info"></div>');
 
-            const title = $('<h5 class="card-title game-title"></h5>').text(game.title_id_name || game.name);
+            const title = $('<h5 class="card-title game-title"></h5>').text(game.name);
             cardOverlay.append(title);
 
             const description = $('<p class="card-text game-description"></p>');
-            if (game.app_type === 'DLC') {
-                const small = $('<small></small>').text(`${game.name} | `);
-                description.append(small);
-            }
-            const small = $('<small></small>').text(game.id);
+            const small = $('<small></small>').text(game.title_id);
             description.append(small);
             cardOverlay.append(description);
 
             const tagsContainer = $('<div class="tags-container"></div>');
 
-            const typeBadgeClass = (game.owned === false) ? 'text-bg-warning' : 'text-bg-info';
-            const typeBadge = $(`<span class="badge rounded-pill ${typeBadgeClass} game-tag"></span>`).text(game.app_type);
-            tagsContainer.append(typeBadge);
+            const baseBadgeClass = game.owned ? 'text-bg-success' : 'text-bg-warning';
+            const baseBadge = $(`<span class="badge rounded-pill ${baseBadgeClass} game-tag" title="Base game"></span>`)
+                .html('<i class="bi bi-disc-fill"></i>');
+            tagsContainer.append(baseBadge);
 
             if (game.has_latest_version !== undefined) {
-                const versionBadge = $(`<span class="badge rounded-pill game-tag version-tag" title="${game.name} Updates"></span>`)
+                const versionBadge = $(`<span class="badge rounded-pill game-tag version-tag" title="${game.name} updates"></span>`)
                     .addClass(`text-bg-${game.has_latest_version ? 'success' : 'warning'}`)
                     .html(`<i class="bi ${game.has_latest_version ? 'bi-check-circle-fill' : 'bi-arrow-down-circle'}"></i>`);
-                if (game.version !== undefined && game.version.length && Array.isArray(game.version)) {
-                    const popoverContent = game.version.map(version =>
-                        `${version.release_date}: v${version.version} ${version.owned ? 'Owned' : 'Missing'}`
-                    ).join('\n');
-                    versionBadge.popover({
-                        content: popoverContent,
-                        trigger: 'click',
-                        placement: 'top',
-                    });
-                    versionBadge.css('cursor', 'pointer');
-                } else {
-                    // version tooltip on hover
-                    versionBadge.attr("data-bs-toggle", "tooltip")
-                    versionBadge.attr("data-bs-placement", "top")
-                    versionBadge.attr("data-bs-title", "Version v0")
-                }
+                versionBadge.attr("data-bs-toggle", "tooltip")
+                versionBadge.attr("data-bs-placement", "top")
+                versionBadge.attr("data-bs-title",
+                    game.has_latest_version ? "Up to date" : "Update available")
                 tagsContainer.append(versionBadge);
             }
 
             if (game.has_all_dlcs !== undefined) {
-                const dlcBadge = $('<span class="badge rounded-pill game-tag"></span>').addClass(`text-bg-${game.has_all_dlcs ? 'success' : 'warning'}`).html('<i class="bi bi-box-seam-fill"></i>');
+                const dlcBadge = $('<span class="badge rounded-pill game-tag" title="DLC set"></span>')
+                    .addClass(`text-bg-${game.has_all_dlcs ? 'success' : 'warning'}`)
+                    .html('<i class="bi bi-box-seam-fill"></i>');
+                dlcBadge.attr("data-bs-toggle", "tooltip")
+                dlcBadge.attr("data-bs-placement", "top")
+                dlcBadge.attr("data-bs-title",
+                    game.has_all_dlcs ? "All DLCs owned" : "Missing DLCs")
                 tagsContainer.append(dlcBadge);
             }
 
@@ -453,13 +356,17 @@
         });
     }
 
-    function renderIconView(apps) {
+    function renderIconView(titles) {
         const gameGrid = $('#gameGrid');
         gameGrid.empty(); // Clear existing games
 
-        apps.forEach(app => {
-            const icon = $('<img class="game-icon">').attr('src', (app.titledb || {}).iconUrl || '');
-            gameGrid.append(icon);
+        titles.forEach(title => {
+            const col = $('<div class="col-auto p-1"></div>');
+            const icon = $('<img class="game-icon rounded"></img>')
+                .attr('src', title.iconUrl || '')
+                .attr('title', title.name || title.titleId);
+            col.append(icon);
+            gameGrid.append(col);
         });
 
         // Adjust icon sizes based on the slider value
@@ -566,8 +473,6 @@
 
     function saveFiltersToStorage() {
         localStorage.setItem('activeFilters', JSON.stringify({
-            type: activeTypeFilter,
-            ownership: activeOwnershipFilter,
             update: activeUpdateFilter,
             completion: activeCompletionFilter,
         }));
@@ -577,12 +482,6 @@
         const savedFilters = localStorage.getItem('activeFilters');
         if (savedFilters) {
             const filters = JSON.parse(savedFilters);
-
-            $('#typeBase').prop('checked', filters.type === 'BASE');
-            $('#typeDlc').prop('checked', filters.type === 'DLC');
-
-            $('#ownershipOwned').prop('checked', filters.ownership === 'Owned');
-            $('#ownershipMissing').prop('checked', filters.ownership === 'Missing');
 
             $('#updateUpToDate').prop('checked', filters.update === 'Up to date');
             $('#updateMissingUpdate').prop('checked', filters.update === 'Outdated');
@@ -601,20 +500,6 @@
 
     /** Read the filter controls into the active* variables the query is built from. */
     function updateFilter() {
-        if ($('#typeBase').is(":checked")) {
-            activeTypeFilter = 'BASE';
-        } else if ($('#typeDlc').is(":checked")) {
-            activeTypeFilter = 'DLC';
-        } else {
-            activeTypeFilter = '';
-        }
-        if ($('#ownershipOwned').is(":checked")) {
-            activeOwnershipFilter = 'Owned';
-        } else if ($('#ownershipMissing').is(":checked")) {
-            activeOwnershipFilter = 'Missing';
-        } else {
-            activeOwnershipFilter = '';
-        }
         if ($('#updateUpToDate').is(":checked")) {
             activeUpdateFilter = 'Up to date';
         } else if ($('#updateMissingUpdate').is(":checked")) {
@@ -697,7 +582,7 @@
             resetToFirstPage();
         });
 
-        $('.type-toggle, .ownership-toggle, .update-toggle, .completion-toggle').change(onFilterChange);
+        $('.update-toggle, .completion-toggle').change(onFilterChange);
 
         // Listen to input changes in the text filter input
         $("#textFilter").on("input", function () {
