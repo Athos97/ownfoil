@@ -1337,10 +1337,14 @@ def _ghostshop_provider(ctx: GraphQLContext):
 
 def resolve_ghostshop_search(query: str, limit: int,
                              ctx: GraphQLContext, info) -> List[GhostshopSearchResult]:
-    """Text search over the Ghost eShop catalog. Admin only."""
+    """Text search over the Ghost eShop catalog. Admin only.
+
+    The portal's search returns no artwork, so each row's icon is ownfoil's own
+    titledb icon for the title id - null for games titledb does not know."""
     if not ctx.can_admin:
         return []
     import logging
+    import titles as titles_lib
     from ghostshop import GhostshopError
     try:
         provider, _settings = _ghostshop_provider(ctx)
@@ -1350,8 +1354,12 @@ def resolve_ghostshop_search(query: str, limit: int,
         # Surface the real cause in the log; the UI can only show an empty list.
         logging.getLogger('main').warning(f'ghostshopSearch failed: {e}')
         return []
-    return [GhostshopSearchResult(tid=r.tid, title=r.title)
-            for r in results[:max(1, min(limit, 50))]]
+    out = []
+    for r in results[:max(1, min(limit, 50))]:
+        info_rec = titles_lib.get_game_info(r.tid) or {}
+        out.append(GhostshopSearchResult(
+            tid=r.tid, title=r.title, icon_url=info_rec.get('iconUrl') or None))
+    return out
 
 
 _CATEGORY_TO_APPTYPE = {'BASE': AppType.BASE, 'UPDATE': AppType.UPDATE, 'DLC': AppType.DLC}

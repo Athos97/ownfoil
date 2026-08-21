@@ -293,6 +293,10 @@ class GhostshopSearchResult:
     """One game found by the Ghost eShop text search. Admin only."""
     tid: str = desc("The game's base title id.")
     title: str = desc("The game's name in the requested language.")
+    icon_url: Optional[str] = desc(
+        "Square art for the list entry. The portal's search does not carry art, "
+        "so this is ownfoil's own titledb icon for the title id - null when "
+        "titledb does not know the game.", default=None)
 
 
 @described(strawberry.type)
