@@ -210,11 +210,17 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authorized():
                 self._json({"statusCode": 401, "message": "Unauthorized"}, 401)
                 return
-            search = (parse_qs(parsed.query).get("search") or [""])[0].lower()
+            # Like the live portal: a missing itemsPerPage fails query validation
+            # with 400 "Expected number, received nan".
+            qs = parse_qs(parsed.query)
+            if not qs.get("itemsPerPage"):
+                self._json({"statusCode": 400, "message": "Expected number, received nan"}, 400)
+                return
+            search = (qs.get("search") or [""])[0].lower()
             results = [{"basetid": tid, "title": title}
                        for tid, title in TITLES.items()
                        if not search or search in title.lower()]
-            self._json({"results": results, "page": 1, "total": len(results)})
+            self._json({"items": results, "total": len(results)})
             return
 
         m = re.match(r"^/api/download-info/([^/]+)$", parsed.path)

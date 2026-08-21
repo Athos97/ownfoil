@@ -91,6 +91,18 @@ def test_search_matches_by_name(provider):
     assert provider.search(logged_in(provider), '   ') == []
 
 
+def test_search_requires_items_per_page(provider):
+    """The live endpoint 400s without itemsPerPage ('Expected number, received
+    nan'); the provider must always send it, and the mock enforces the rule."""
+    import requests as _r
+    session = logged_in(provider)
+    url = provider.portal + '/api/games/fetch-list'
+    params = {'search': 'zelda', 'language': 'en', 'page': 1}
+    assert session.get(url, params=params, timeout=(10, 30)).status_code == 400
+    params['itemsPerPage'] = 20
+    assert session.get(url, params=params, timeout=(10, 30)).status_code == 200
+
+
 # --- downloads ---
 
 def test_full_download_byte_exact(provider, tmp_path):

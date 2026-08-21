@@ -211,8 +211,12 @@ class GhosteshopProvider:
         return GameCard(title=str(data.get('title') or ''), entries=entries)
 
     def search(self, session: requests.Session, text: str,
-               page: int = 1, language: Optional[str] = None) -> List[SearchResult]:
-        """Text search over the catalog (fetch-list). Returns games, not files."""
+               page: int = 1, language: Optional[str] = None,
+               limit: int = 50) -> List[SearchResult]:
+        """Text search over the catalog (fetch-list). Returns games, not files.
+
+        `itemsPerPage` is mandatory on the real endpoint: without it the query
+        validator coerces the missing number to NaN and answers 400."""
         text = (text or '').strip()
         if not text:
             return []
@@ -220,17 +224,17 @@ class GhosteshopProvider:
             response = session.get(
                 self.portal + '/api/games/fetch-list',
                 params={'search': text, 'language': language or self.language,
-                        'page': page},
+                        'page': page, 'itemsPerPage': max(1, min(limit, 50))},
                 timeout=REQUEST_TIMEOUT)
         except requests.RequestException as exc:
             raise GhostshopError(f'network error on /api/games/fetch-list: {exc}') from exc
         data = self._parse_json(response, '/api/games/fetch-list')
-        # The response shape varies between deployments: a bare list, or an
-        # object wrapping one under a known key.
+        # Deployments wrap the rows differently: a bare list, or an object with
+        # one known key (the live portal uses {"items": [...], "total": N}).
         items = data
         if isinstance(data, dict):
             items = None
-            for key in ('results', 'games', 'data', 'items', 'list'):
+            for key in ('items', 'results', 'games', 'data', 'list'):
                 seq = data.get(key)
                 if isinstance(seq, list):
                     items = seq

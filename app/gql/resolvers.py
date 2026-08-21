@@ -1340,12 +1340,15 @@ def resolve_ghostshop_search(query: str, limit: int,
     """Text search over the Ghost eShop catalog. Admin only."""
     if not ctx.can_admin:
         return []
+    import logging
     from ghostshop import GhostshopError
     try:
         provider, _settings = _ghostshop_provider(ctx)
         session = provider.login()
-        results = provider.search(session, query)
-    except GhostshopError:
+        results = provider.search(session, query, limit=limit)
+    except GhostshopError as e:
+        # Surface the real cause in the log; the UI can only show an empty list.
+        logging.getLogger('main').warning(f'ghostshopSearch failed: {e}')
         return []
     return [GhostshopSearchResult(tid=r.tid, title=r.title)
             for r in results[:max(1, min(limit, 50))]]
