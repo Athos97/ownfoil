@@ -6,9 +6,15 @@ trigger, sharing one target list and one `downloads` table:
   - torrents: search Jackett, rank the results, hand the best torrent to
     qBittorrent downloading straight into a library path - the file watcher
     then identifies it and app ownership flips the row to `completed`.
+    The pass itself only talks to the APIs; the disk writes are qBittorrent's,
+    outside ownfoil's I/O budget by necessity.
   - ghosteshop: log into Ghost eShop PRO, resolve the exact catalog entry,
     and chunked-download it (with resume) into the game's own folder inside
     a library path - completion flows through the watcher the same way.
+    Each file downloads as its own `ghosteshop_download` task in the `io`
+    concurrency group, sharing the Workers I/O budget with verification and
+    compression: `prepare_ghosteshop_targets` computes the list, the tasks
+    do the transferring.
 
 One row per (app_id, app_version) target: whichever source claims it first,
 the other leaves it alone. Failed rows are retried only by their own source.
@@ -22,6 +28,7 @@ import jackett
 import qbittorrent
 import ghostshop
 import ghostshop.net
+from sqlalchemy import text
 from constants import *
 from db import *
 from settings import get_settings, get_library_paths
@@ -33,6 +40,11 @@ SWITCH_EXTS = ('nsp', 'nsz', 'xci', 'xcz')
 
 SOURCE_TORRENTS = 'torrents'
 SOURCE_GHOSTESHOP = ghostshop.SOURCE_GHOSTESHOP
+
+# The per-file io task the Ghost eShop pass hands its work to (registered in
+# tasks.py). The name lives here too because orphan healing matches it against
+# the tasks table.
+GHOSTESHOP_DOWNLOAD_TASK = 'ghosteshop_download'
 
 QB_ERROR_STATES = ('error', 'missingFiles', 'unknown')
 QB_ACTIVE_STATES = ('downloading', 'uploading', 'stalledDL', 'stalledUP',
@@ -513,70 +525,143 @@ def is_configured(settings):
     return torrents_configured(settings) or ghosteshop_configured(settings)
 
 
-def _targets_for_source(source):
-    if source != SOURCE_GHOSTESHOP:
-        return [], []
-    queued = [d for d in get_downloads_in_progress()
-              if d.source == SOURCE_GHOSTESHOP and d.status == 'queued']
-    targets = [rebuild_target_from_download(d) for d in queued]
-    return queued, targets
+# ---------------------------------------------------------------- ghosteshop pass
+
+def _requeue_orphan_ghosteshop_rows():
+    """Ghost rows left 'downloading' by a cancelled or interrupted pass - one whose
+    per-file task is no longer alive - go back to 'queued' so this pass re-enqueues
+    them. The .part file on disk makes resuming cheap."""
+    rows = db.session.execute(text(f"""
+        SELECT d.id FROM downloads d
+        WHERE d.source = :source AND d.status = 'downloading'
+          AND NOT EXISTS (
+            SELECT 1 FROM tasks t
+            WHERE t.task_name = :task_name
+              AND t.status IN ('pending', 'running')
+              AND json_extract(t.input_json, '$.app_id') = d.app_id
+              AND json_extract(t.input_json, '$.app_version') = d.app_version
+          )
+    """), {'source': SOURCE_GHOSTESHOP,
+           'task_name': GHOSTESHOP_DOWNLOAD_TASK}).all()
+    for (row_id,) in rows:
+        update_download(row_id, status='queued', error=None, progress=0)
+        logger.info(f'[ghosteshop] Requeued orphaned download row {row_id} '
+                    '(no live task for it).')
 
 
-def run_downloader_job(settings=None, source=SOURCE_TORRENTS, progress=None):
+def prepare_ghosteshop_targets(settings=None):
+    """Compute the Ghost eShop work list for one pass. Downloading is NOT done
+    here: each target becomes its own `ghosteshop_download` io task, so transfers
+    share the Workers I/O budget with verification and compression.
+
+    Returns [{app_id, app_version, name}] - Add Content rows first, then the
+    computed missing targets, deduped by (app_id, app_version)."""
     settings = settings or get_settings()
-    if source == SOURCE_TORRENTS:
-        configured = torrents_configured(settings)
-    else:
-        configured = ghosteshop_configured(settings)
-    if not configured:
-        logger.info(f'Downloader source "{source}" not enabled/configured, skipping.')
+    if not ghosteshop_configured(settings):
+        logger.info('Ghost eShop source not enabled/configured, skipping.')
+        return []
+
+    sync_downloads_status(settings)
+    _requeue_orphan_ghosteshop_rows()
+
+    targets = []
+    # Explicit queued rows first (Add Content) - bases included.
+    for d in get_downloads_in_progress():
+        if d.source == SOURCE_GHOSTESHOP and d.status == 'queued':
+            targets.append({'app_id': d.app_id,
+                            'app_version': str(d.app_version),
+                            'name': d.name or d.app_id})
+    # Then the computed missing updates/DLCs.
+    for target in get_missing_targets():
+        app_id = target.get('app_id')
+        ver = str(target.get('app_version'))
+        row = get_download_by_app(app_id, ver)
+        if row is not None:
+            if (row.source or SOURCE_TORRENTS) != SOURCE_GHOSTESHOP:
+                continue  # the other lane owns this target
+            if row.status != 'failed':
+                continue  # queued already listed; downloading rows were healed above
+            # A failed row would otherwise block the target forever: content can
+            # appear after the first miss, so every pass retries failed targets
+            # from scratch - same rule as the torrents lane.
+            logger.info(f'[ghosteshop] Retrying failed download for {app_id} v{ver}.')
+            delete_download(row.id)
+        targets.append({'app_id': app_id, 'app_version': ver,
+                        'name': target.get('name') or app_id})
+
+    seen = set()
+    out = []
+    for t in targets:
+        key = (t['app_id'], t['app_version'])
+        if key not in seen:
+            seen.add(key)
+            out.append(t)
+    logger.info(f'Ghost eShop pass: {len(out)} item(s) to download.')
+    return out
+
+
+def download_ghosteshop_row(app_id, app_version, settings=None):
+    """Download one downloads row via Ghost eShop - the body of the per-file io
+    task. The download row is the source of truth: a vanished or foreign-lane
+    row is a no-op, an owned target flips to completed."""
+    settings = settings or get_settings()
+    row = get_download_by_app(app_id, str(app_version))
+    if row is None or (row.source or SOURCE_TORRENTS) != SOURCE_GHOSTESHOP:
+        return False  # row deleted or claimed elsewhere - nothing to do
+    if is_app_owned(app_id, app_version):
+        update_download(row.id, status='completed', error=None, progress=100)
+        return True
+    target = rebuild_target_from_download(row)
+    return download_target_ghosteshop(target, settings, existing_row=row)
+
+
+# ---------------------------------------------------------------- torrents pass
+
+def run_downloader_job(settings=None, progress=None):
+    """One torrents pass: sync download rows against qBittorrent, compute the
+    missing targets, and hand the best torrent for each to qBittorrent. The
+    pass only talks to the Jackett/qBittorrent APIs - the disk writes happen
+    in qBittorrent, outside ownfoil's I/O budget.
+
+    The Ghost eShop source does not run through here; see
+    prepare_ghosteshop_targets / download_ghosteshop_row."""
+    settings = settings or get_settings()
+    if not torrents_configured(settings):
+        logger.info('Downloader source "torrents" not enabled/configured, skipping.')
         return
-    logger.info(f'Starting downloader job ({source})...')
+    logger.info('Starting downloader job (torrents)...')
     try:
         sync_downloads_status(settings)
-        # Explicit queued rows first (Add Content), then the computed missing
-        # targets - the (app_id, app_version) row dedup keeps each target in
-        # exactly one lane.
-        queued_rows, queued_targets = _targets_for_source(source)
         missing = get_missing_targets()
-        logger.info(f'Downloader ({source}): {len(queued_targets)} queued item(s), '
-                    f'{len(missing)} missing target(s).')
+        logger.info(f'Downloader (torrents): {len(missing)} missing target(s).')
         added = 0
         added_cache = {}  # download url -> info_hash, so a bundle torrent is added once
-        items = list(zip(queued_rows, queued_targets)) + [(None, t) for t in missing]
-        for i, (row, target) in enumerate(items):
-            if row is None:
-                existing = get_download_by_app(target.get('app_id'),
-                                               str(target.get('app_version')))
-                if existing is not None:
-                    if existing.source and existing.source != source:
-                        continue  # the other source owns this target
-                    if existing.status != 'failed':
-                        continue
-                    # A failed row would otherwise block the target forever: content
-                    # appears on trackers (or FlareSolverr comes online) after the first
-                    # miss, so every pass re-searches failed targets from scratch.
-                    logger.info(f"[{source}] Retrying failed download for "
-                                f"{target.get('app_id')} v{target.get('app_version')}.")
-                    delete_download(existing.id)
+        for i, target in enumerate(missing):
+            existing = get_download_by_app(target.get('app_id'),
+                                           str(target.get('app_version')))
+            if existing is not None:
+                if (existing.source or SOURCE_TORRENTS) != SOURCE_TORRENTS:
+                    continue  # the other source owns this target
+                if existing.status != 'failed':
+                    continue
+                # A failed row would otherwise block the target forever: content
+                # appears on trackers (or FlareSolverr comes online) after the first
+                # miss, so every pass re-searches failed targets from scratch.
+                logger.info(f"[torrents] Retrying failed download for "
+                            f"{target.get('app_id')} v{target.get('app_version')}.")
+                delete_download(existing.id)
             try:
-                if source == SOURCE_TORRENTS:
-                    if download_target_torrents(target, settings, added_cache):
-                        added += 1
-                else:
-                    if download_target_ghosteshop(target, settings, existing_row=row):
-                        added += 1
+                if download_target_torrents(target, settings, added_cache):
+                    added += 1
             except Exception as e:
-                logger.error(f"[{source}] Error processing {target.get('app_id')}: {e}")
+                logger.error(f"[torrents] Error processing {target.get('app_id')}: {e}")
             if progress:
-                progress(int((i + 1) * 100 / max(1, len(items))))
+                progress(int((i + 1) * 100 / max(1, len(missing))))
         sync_downloads_status(settings)
-        summary = (f'Added {len(added_cache)} torrent(s) covering {added} target(s).'
-                   if source == SOURCE_TORRENTS else
-                   f'Downloaded {added} item(s) from Ghost eShop.')
-        logger.info(f'Downloader job ({source}) done. {summary}')
+        logger.info(f'Downloader job (torrents) done. Added {len(added_cache)} '
+                    f'torrent(s) covering {added} target(s).')
     except Exception as e:
-        logger.error(f'Downloader job ({source}) failed: {e}')
+        logger.error(f'Downloader job (torrents) failed: {e}')
 
 
 def retry_download(download_id, settings):

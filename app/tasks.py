@@ -150,6 +150,8 @@ TASK_DISPLAY = {
     'handle_dir_deleted': lambda dirpath, **kw: f'Deleted folder {os.path.basename(dirpath)}',
     'downloader_torrents_run': lambda **kw: 'Download missing content (torrents)',
     'downloader_ghosteshop_run': lambda **kw: 'Download missing content (Ghost eShop)',
+    'ghosteshop_download': lambda name=None, app_id=None, **kw: (
+        f'Download {name or app_id} (Ghost eShop)'),
 }
 
 
@@ -646,26 +648,66 @@ def arm_downloader_schedule(settings=None):
     update_scheduled_task('downloader_ghosteshop_run', run_after)
 
 
-def _register_downloader_task(name, source):
-    @register_task(name)
-    def _run(**kwargs):
-        """Check for missing content and download it via this source, then re-arm."""
-        settings = get_settings()
-        try:
-            downloader_lib.run_downloader_job(
-                settings, source=source, progress=_task_progress(_current_task_id))
-        except Exception:
-            update_scheduled_task(name,
-                                  datetime.datetime.utcnow() + DOWNLOADER_RETRY_DELAY)
-            raise
+@register_task('downloader_torrents_run')
+def downloader_torrents_run_task(**kwargs):
+    """Torrents pass: sync rows, search missing content on Jackett, hand each
+    match to qBittorrent - then re-arm the next run."""
+    settings = get_settings()
+    try:
+        downloader_lib.run_downloader_job(
+            settings, progress=_task_progress(_current_task_id))
+    except Exception:
+        update_scheduled_task('downloader_torrents_run',
+                              datetime.datetime.utcnow() + DOWNLOADER_RETRY_DELAY)
+        raise
+    arm_downloader_schedule(settings)
+
+
+@register_task('downloader_ghosteshop_run')
+def downloader_ghosteshop_run_task(**kwargs):
+    """Ghost eShop pass: compute the work list and hand one io task per file.
+
+    The pass itself is quick (one catalog fetch per target happens inside each
+    child); the transfers run as `ghosteshop_download` children in the `io`
+    concurrency group, sharing the Workers I/O budget with verification and
+    compression instead of bypassing it."""
+    settings = get_settings()
+    try:
+        targets = downloader_lib.prepare_ghosteshop_targets(settings)
+    except Exception:
+        update_scheduled_task('downloader_ghosteshop_run',
+                              datetime.datetime.utcnow() + DOWNLOADER_RETRY_DELAY)
+        raise
+    if not targets:
         arm_downloader_schedule(settings)
-    return _run
+        return
+    for t in targets:
+        enqueue_or_child(
+            downloader_lib.GHOSTESHOP_DOWNLOAD_TASK,
+            {'app_id': t['app_id'], 'app_version': t['app_version'],
+             'name': t['name']})
+    set_waiting_for_children()
 
 
-downloader_torrents_run_task = _register_downloader_task(
-    'downloader_torrents_run', downloader_lib.SOURCE_TORRENTS)
-downloader_ghosteshop_run_task = _register_downloader_task(
-    'downloader_ghosteshop_run', downloader_lib.SOURCE_GHOSTESHOP)
+@register_continuation('downloader_ghosteshop_run')
+def _downloader_ghosteshop_done(**kwargs):
+    """All Ghost eShop children finished: final sync, summary, next run armed."""
+    settings = get_settings()
+    downloader_lib.sync_downloads_status(settings)
+    logger.info('Ghost eShop pass done.')
+    arm_downloader_schedule(settings)
+
+
+@register_task(downloader_lib.GHOSTESHOP_DOWNLOAD_TASK, group='io')
+def ghosteshop_download_task(app_id, app_version, name=None, **kwargs):
+    """Download one file from Ghost eShop into the game's folder, with resume.
+
+    The downloads row is the source of truth: a vanished or foreign-lane row is
+    a no-op, an owned target just flips to completed. Failures land on the row
+    (visible on the Downloads page) rather than raising - a missing catalog
+    entry is an expected outcome, not a task crash."""
+    settings = get_settings()
+    downloader_lib.download_ghosteshop_row(app_id, str(app_version), settings)
 
 
 # --- Scan pipeline ---

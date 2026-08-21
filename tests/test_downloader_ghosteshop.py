@@ -1,13 +1,15 @@
 """Ghost eShop lane of the downloader: destination paths, row lifecycle, queue flow."""
+import json
 import os
 
 import pytest
 
 import db as db_mod
 import downloader as downloader_lib
+import tasks as tasks_mod
 import ghostshop
 from app import create_app
-from db import db, init_db, Download, Titles, Apps
+from db import db, init_db, Download, Task, Titles, Apps
 from ghostshop.types import CatalogEntry
 from mock_ghostshop_portal import MockPortal, USER, PASS, blob_for
 
@@ -136,23 +138,61 @@ def test_download_target_bad_credentials(library, portal, tmp_path):
 
 
 def test_job_processes_queued_rows_before_missing(library, portal, tmp_path, monkeypatch):
+    """The pass computes targets; each target then downloads as its own io task
+    (here driven directly, the way the worker drives it in production)."""
     monkeypatch.setattr(downloader_lib.titles_lib, 'get_game_info',
                         lambda tid: {'name': 'Zelda BOTW'})
-    """Add Content rows (queued, BASE included) are processed by the ghosteshop pass."""
     settings = settings_with(str(tmp_path), ghost_settings(portal))
     monkeypatch.setattr(downloader_lib, 'get_missing_targets', lambda: [])
-    monkeypatch.setattr(downloader_lib, 'ghosteshop_configured', lambda s: True)
+    monkeypatch.setattr(tasks_mod, 'get_settings', lambda: settings)
 
     downloader_lib.queue_ghosteshop_download(
         title_id=ZELDA_TID, app_id=ZELDA_UPD_TID, app_version='1114112',
         app_type='UPDATE', name='Zelda BOTW')
-    downloader_lib.run_downloader_job(settings, source='ghosteshop')
+
+    targets = downloader_lib.prepare_ghosteshop_targets(settings)
+    assert [(t['app_id'], t['app_version']) for t in targets] == \
+        [(ZELDA_UPD_TID, '1114112')]
+
+    for t in targets:
+        tasks_mod.ghosteshop_download_task(
+            app_id=t['app_id'], app_version=t['app_version'], name=t['name'])
 
     row = Download.query.filter_by(app_id=ZELDA_UPD_TID).one()
     assert row.status == 'downloading'
     assert row.progress == 100
     dest = tmp_path / 'Zelda BOTW' / ZELDA_UPD_NAME
     assert dest.is_file()
+    assert dest.read_bytes() == blob_for(ZELDA_UPD_NAME, ZELDA_UPD_SIZE)
+
+
+def test_orphan_downloading_rows_are_requeued(library, portal, tmp_path):
+    """A 'downloading' row whose per-file task is gone (cancelled pass, restart)
+    is healed back to queued and re-listed; one with a live task is left alone."""
+    settings = settings_with(str(tmp_path), ghost_settings(portal))
+    row = downloader_lib.add_download(
+        title_id=ZELDA_TID, app_id=ZELDA_UPD_TID, app_version='1114112',
+        app_type='UPDATE', name='Zelda BOTW', source='ghosteshop',
+        status='downloading', progress=37)
+
+    # No task alive -> requeued and listed.
+    targets = downloader_lib.prepare_ghosteshop_targets(settings)
+    assert (ZELDA_UPD_TID, '1114112') in [(t['app_id'], t['app_version']) for t in targets]
+    assert row.status == 'queued'
+    assert row.progress == 0
+
+    # A live child task -> the row is respected and not re-listed.
+    downloader_lib.update_download(row.id, status='downloading', progress=40)
+    child_input = {'app_id': ZELDA_UPD_TID, 'app_version': '1114112'}
+    db.session.add(Task(task_name=downloader_lib.GHOSTESHOP_DOWNLOAD_TASK,
+                        status='pending',
+                        input_json=json.dumps(child_input),
+                        input_hash=tasks_mod.compute_input_hash(child_input)))
+    db.session.commit()
+    targets = downloader_lib.prepare_ghosteshop_targets(settings)
+    assert (ZELDA_UPD_TID, '1114112') not in \
+        [(t['app_id'], t['app_version']) for t in targets]
+    assert row.status == 'downloading'
 
 
 def test_sources_do_not_steal_each_others_rows(library, portal, tmp_path, monkeypatch):
@@ -172,7 +212,34 @@ def test_sources_do_not_steal_each_others_rows(library, portal, tmp_path, monkey
         app_type='UPDATE', name='Zelda BOTW')
     row = Download.query.filter_by(app_id=ZELDA_UPD_TID).one()
 
-    downloader_lib.run_downloader_job(settings, source='torrents')
+    downloader_lib.run_downloader_job(settings)
     assert row.status == 'queued', "the torrents pass must not touch ghosteshop rows"
     assert not dl_dir.exists() or list(dl_dir.rglob('*')) == [], \
         "the torrents pass must not download ghosteshop rows' content"
+
+
+def test_ghosteshop_download_is_an_io_task():
+    """The per-file download must share the Workers I/O budget with verification
+    and compression - that is the whole point of splitting the pass."""
+    assert tasks_mod.TASK_GROUPS.get(downloader_lib.GHOSTESHOP_DOWNLOAD_TASK) == 'io'
+    # The pass itself orchestrates only: no group, so it never holds an I/O slot.
+    assert downloader_lib.GHOSTESHOP_DOWNLOAD_TASK not in (
+        tasks_mod.TASK_GROUPS.get('downloader_ghosteshop_run'),)
+
+
+def test_parent_task_enqueues_one_child_per_target(library, portal, tmp_path, monkeypatch):
+    settings = settings_with(str(tmp_path), ghost_settings(portal))
+    monkeypatch.setattr(tasks_mod, 'get_settings', lambda: settings)
+    monkeypatch.setattr(downloader_lib, 'get_missing_targets', lambda: [{
+        'title_id': ZELDA_TID, 'app_id': ZELDA_UPD_TID, 'app_version': '1114112',
+        'app_type': 'UPDATE', 'name': 'Zelda BOTW', 'patch_level': 17}])
+    monkeypatch.setattr(tasks_mod, 'set_waiting_for_children', lambda: None)
+
+    tasks_mod.downloader_ghosteshop_run_task()
+
+    children = Task.query.filter_by(
+        task_name=downloader_lib.GHOSTESHOP_DOWNLOAD_TASK).all()
+    assert len(children) == 1
+    child_input = json.loads(children[0].input_json)
+    assert child_input['app_id'] == ZELDA_UPD_TID
+    assert child_input['app_version'] == '1114112'

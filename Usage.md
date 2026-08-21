@@ -370,3 +370,5 @@ Each pass searches every missing update/DLC (app id first, then game name), rank
 | `Download root` | first library path | Where per-game folders are created. |
 
 Downloads go straight into `<library>/<game name>/` with the same folder naming the organizer uses, resumable across runs if a transfer is interrupted. Console keys must be loaded for the landed files to be identified.
+
+Each file downloads as its own task in the I/O concurrency group - the same `Max concurrent I/O tasks` budget as verification and compression ([Workers](#workers)) - so a big sync takes turns with the rest of the pipeline instead of hammering the disk alongside it. The torrents lane is different: its pass only talks to the Jackett/qBittorrent APIs, and the actual disk writes belong to qBittorrent, which manages its own pace.
