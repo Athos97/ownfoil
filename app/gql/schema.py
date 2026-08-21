@@ -10,17 +10,18 @@ from .docs import arg as _arg, described, described_field
 from .filters import AppFilter, AppType, FileFilter, OrderBy, TitleFilter
 from .mutations import Mutation
 from .resolvers import (
-    resolve_app, resolve_apps, resolve_downloads, resolve_downloader_status,
+    resolve_app, resolve_apps, resolve_activity, resolve_blacklisted_apps,
+    resolve_downloads, resolve_downloader_status,
     resolve_file, resolve_files, resolve_ghostshop_game, resolve_ghostshop_search,
     resolve_jackett_search, resolve_libraries, resolve_missing_targets,
     resolve_stats, resolve_task, resolve_tasks, resolve_title,
     resolve_titles, resolve_workers,
 )
 from .types import (
-    App, AppConnection, Download, DownloadSource, DownloadStatus, File,
-    FileConnection, GhostshopGame, GhostshopSearchResult, JackettSearchResult,
-    Library, LibraryStats, MissingTarget, SourceStatus, Task, TaskStatus, Title,
-    TitleConnection, Worker,
+    App, AppConnection, BlacklistedApp, Download, DownloadSource, DownloadStatus,
+    File, FileConnection, GhostshopGame, GhostshopSearchResult,
+    JackettSearchResult, Library, LibraryStats, MissingTarget, SourceStatus,
+    Task, TaskStatus, Title, TitleConnection, ActivityEvent, ActivityKind, Worker,
 )
 
 
@@ -272,6 +273,24 @@ class Query:
         Add Content. Requires the Jackett credentials from the torrents source. Admin
         only; empty when Jackett is not configured."""
         return resolve_jackett_search(query, limit, ctx=info.context, info=info)
+
+    @described_field
+    def blacklisted_apps(self, info: Info) -> List[BlacklistedApp]:
+        """The app-id blacklist: content deliberately excluded from missing-content
+        tracking (language packs and the like). Admin only; empty for any other
+        role."""
+        return resolve_blacklisted_apps(ctx=info.context, info=info)
+
+    @described_field
+    def activity(
+        self, info: Info,
+        kind: Annotated[Optional[ActivityKind], _arg(
+            "Restrict to one kind of event. Omit for all of them.")] = None,
+        limit: Annotated[int, _arg("Maximum rows to return, clamped to 1-500.")] = 100,
+    ) -> List[ActivityEvent]:
+        """Captured user activity - shop connections, file downloads, web logins -
+        newest first. Admin only; empty for any other role."""
+        return resolve_activity(kind, limit, ctx=info.context, info=info)
 
 
 # The deepest legitimate query the UI issues is roughly

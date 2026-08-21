@@ -1,4 +1,5 @@
 import datetime
+import re
 from flask import Flask, render_template, request, redirect, url_for, jsonify, send_from_directory, Response
 from flask_login import LoginManager
 from flask_sock import Sock
@@ -16,6 +17,7 @@ from db import *
 from auth import *
 from utils import *
 from library import *
+import activity
 import json
 import tasks as tasks_mod
 import realtime
@@ -162,6 +164,7 @@ sock = Sock(app)
 realtime.init_app(app)
 import task_events  # noqa: F401 — registers the tasks/workers topics
 import download_events  # noqa: F401 — registers the downloads topic
+import activity_events  # noqa: F401 — registers the activity topic
 
 
 @sock.route('/api/ws')
@@ -289,11 +292,38 @@ def update_library_page():
     return render_template('update.html', title='Update Library',
                            admin_account_created=admin_account_created())
 
+@app.route('/admin/activity')
+@access_required('admin')
+def activity_page():
+    import activity_events
+    return render_template('activity.html', title='Activity',
+                           max_events=activity_events.MAX_ACTIVITY,
+                           admin_account_created=admin_account_created())
+
 @app.route('/admin/add-content')
 @access_required('admin')
 def add_content_page():
     return render_template('add_content.html', title='Add Content',
                            admin_account_created=admin_account_created())
+
+@app.route('/game/<title_id>')
+def game_detail_page(title_id):
+    """One game's family detail: base, updates and DLCs with ownership state.
+
+    Same access model as the library grid itself: shop access (or a public shop)."""
+    settings = get_settings()
+    if not settings['shop']['public'] and admin_account_created():
+        if not current_user.is_authenticated:
+            return login_manager.unauthorized()
+        if not current_user.has_shop_access():
+            return 'Forbidden', 403
+    title_id = title_id.upper()
+    if not re.fullmatch(r'[0-9A-F]{16}', title_id):
+        return 'Not a title id', 404
+    return render_template('game_detail.html', title='Library',
+                           title_id=title_id,
+                           admin_account_created=admin_account_created())
+
 
 @app.route('/setup')
 def setup_page():
@@ -615,6 +645,54 @@ def upload_file():
     return jsonify(resp)
 
 
+@app.post('/api/blacklist/import')
+@access_required('admin')
+def import_blacklist_api():
+    """Upsert blacklist entries from a JSON file (or inline JSON body).
+
+    Accepts the switch-library-updater blacklist.json format: a list of
+    "00112233445566AA" strings, or objects {"id": ..., "note": ...}. Unknown
+    app ids are reported back rather than aborting the whole import.
+    """
+    import json as json_mod
+    from db import upsert_blacklisted_app, normalize_app_id
+    data = None
+    if 'file' in request.files:
+        try:
+            data = json_mod.load(request.files['file'])
+        except ValueError as e:
+            return jsonify({'success': False, 'errors': [f'Invalid JSON: {e}']})
+    else:
+        data = request.get_json(silent=True)
+    if data is None:
+        return jsonify({'success': False, 'errors': ['No JSON provided.']})
+    if isinstance(data, dict):
+        data = data.get('entries', data.get('blacklist'))
+
+    imported, invalid = 0, []
+    if isinstance(data, list):
+        for entry in data:
+            if isinstance(entry, dict):
+                raw_id = entry.get('id') or entry.get('app_id')
+                note = entry.get('note')
+            else:
+                raw_id, note = entry, None
+            if raw_id in (None, ''):
+                continue
+            ok, err = upsert_blacklisted_app(raw_id, note)
+            if ok:
+                imported += 1
+            else:
+                invalid.append(str(raw_id))
+    else:
+        return jsonify({'success': False,
+                        'errors': ['Expected a JSON list of ids or {id, note} objects.']})
+
+    if imported:
+        tasks_mod.enqueue_task('update_titles')
+    return jsonify({'success': True, 'imported': imported, 'invalid': invalid})
+
+
 from gql import graphql_dispatch
 
 app.add_url_rule(
@@ -627,12 +705,17 @@ app.add_url_rule(
 @file_access
 def serve_game(id):
     """Serve a game file to authenticated clients."""
-    filepath = db.session.query(Files.filepath).filter_by(id=id).scalar()
-    if not filepath:
+    file_row = db.session.query(Files.filepath, Files.size).filter_by(id=id).first()
+    if not file_row:
         return jsonify({'error': f'No file with id {id}.'}), 404
+    filepath, file_size = file_row
     filedir, filename = os.path.split(filepath)
     # Count only once the response exists: clients probe files with a Range before taking
     # them, and a range past the end of the file raises out of here without transferring.
     response = send_from_directory(filedir, filename)
-    increment_download_count_throttled(filepath, client_address(request))
+    counted = increment_download_count_throttled(filepath, client_address(request))
+    activity.record_download(
+        request, filepath, size=file_size, client_name=None,
+        username=(request.authorization.username if request.authorization else None),
+        counted=bool(counted))
     return response

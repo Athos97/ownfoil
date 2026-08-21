@@ -194,8 +194,13 @@ def init_libraries(app, watcher, paths):
 
 def add_missing_apps_for_title(title_id):
     """Expand missing base/update/DLC apps (owned=False) for a single title via one bulk upsert.
-    Safe to run concurrently with other workers expanding the same title."""
+    Safe to run concurrently with other workers expanding the same title.
+
+    Blacklisted apps are not materialized: they are not "missing content" and would
+    only add noise rows. (The identification path can still create one with owned=True
+    if such a file ever lands - the flags and target queries filter by table anyway.)"""
     title_db_id = get_title_id_db_id(title_id)
+    blacklisted = get_blacklisted_app_ids()
 
     rows = []
     update_app_id = title_id[:-3] + '800'
@@ -207,7 +212,7 @@ def add_missing_apps_for_title(title_id):
                              owned=False, title_id=title_db_id,
                              release_date=version_info.get('release_date')))
             base_added = True
-        else:
+        elif update_app_id not in blacklisted:
             rows.append(dict(app_id=update_app_id, app_version=v, app_type=APP_TYPE_UPD,
                              owned=False, title_id=title_db_id,
                              release_date=version_info.get('release_date')))
@@ -217,6 +222,8 @@ def add_missing_apps_for_title(title_id):
                          owned=False, title_id=title_db_id, release_date=None))
 
     for dlc_app_id, dlc_version, dlc_release_date in titles_lib.get_all_dlc_versions(title_id):
+        if dlc_app_id in blacklisted:
+            continue
         rows.append(dict(app_id=dlc_app_id, app_version=str(dlc_version),
                          app_type=APP_TYPE_DLC, owned=False, title_id=title_db_id,
                          release_date=dlc_release_date))
@@ -314,7 +321,11 @@ def remove_outdated_update_files():
 def update_title_flags(title_id):
     """Recompute have_base / up_to_date / complete for a single title.
     Wrapped in BEGIN IMMEDIATE to serialize concurrent recomputes and prevent
-    lost updates when another worker is mutating owned state for the same title."""
+    lost updates when another worker is mutating owned state for the same title.
+
+    Blacklisted apps are excluded from the update/DLC sets: a blacklisted DLC never
+    keeps a title from reading complete, and a blacklisted update never keeps it
+    from reading up to date."""
     connection = db.engine.raw_connection()
     try:
         cursor = connection.cursor()
@@ -328,7 +339,8 @@ def update_title_flags(title_id):
         title_db_id = row[0]
 
         cursor.execute(
-            "SELECT app_type, app_version, owned FROM apps WHERE title_id = ?",
+            "SELECT app_type, app_version, owned FROM apps "
+            "WHERE title_id = ? AND app_id NOT IN (SELECT app_id FROM app_blacklist)",
             (title_db_id,)
         )
         title_apps = [{'app_type': r[0], 'app_version': r[1], 'owned': bool(r[2])} for r in cursor.fetchall()]
@@ -348,7 +360,9 @@ def update_title_flags(title_id):
             up_to_date = highest_owned >= highest_available
 
         cursor.execute(
-            "SELECT app_id, app_version, owned FROM apps WHERE title_id = ? AND app_type = ?",
+            "SELECT app_id, app_version, owned FROM apps "
+            "WHERE title_id = ? AND app_type = ? "
+            "AND app_id NOT IN (SELECT app_id FROM app_blacklist)",
             (title_db_id, APP_TYPE_DLC)
         )
         dlc_by_id = {}

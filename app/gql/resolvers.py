@@ -23,7 +23,8 @@ from .types import (
     GhostshopSearchResult, JackettSearchResult, Library, LibraryStats,
     MissingTarget, Ownership, SizedCountByKey, SourceStatus, Task,
     TaskStatus, Title, TitleConnection, TitledbDlc, TitledbVersion,
-    UnidentifiedFile, VerificationStatusCount, Worker, decode_json_list,
+    UnidentifiedFile, VerificationStatusCount, Worker, BlacklistedApp,
+    ActivityEvent, ActivityKind, decode_json_list,
 )
 
 
@@ -269,6 +270,10 @@ def _load_apps_for_titles(
     all_apps: List[App] = []
     app_pks = []
     apps_by_pk: Dict[int, App] = {}
+    blacklisted = set()
+    if rows:
+        blacklisted = set(db.session.execute(text(
+            "SELECT app_id FROM app_blacklist")).scalars())
     for r in rows:
         a = App(
             id=strawberry.ID(str(r.id)),
@@ -277,6 +282,7 @@ def _load_apps_for_titles(
             app_version=_version_int(r.app_version),
             app_type=r.app_type,
             owned=bool(r.owned),
+            blacklisted=r.app_id in blacklisted,
             release_date=r.release_date,
             files_loaded=[] if with_files else None,
         )
@@ -459,11 +465,14 @@ def _hydrate_titledb_dlc(titles: List[Title], sel: "Selection") -> None:
     ORDER BY key, dlc_app_id
     """), params).all()
     want_titledb = sel.has("titledb")
+    blacklisted = set(db.session.execute(text(
+        "SELECT app_id FROM app_blacklist")).scalars())
     by_id: Dict[str, List[TitledbDlc]] = {}
     for r in rows:
         by_id.setdefault((r.key or "").upper(), []).append(TitledbDlc(
             app_id=r.dlc_app_id,
             version=int(r.version) if r.version is not None else None,
+            blacklisted=(r.dlc_app_id or '') in blacklisted,
             titledb=_build_title(r, with_apps=False, with_files=False)
                     if want_titledb and r._mapping.get('title_id') else None,
         ))
@@ -1394,3 +1403,56 @@ def resolve_jackett_search(query: str, limit: int,
         indexer=r.get('indexer'),
         publish_date=r.get('publish_date') or None,
     ) for r in results[:max(1, min(limit, 100))]]
+
+
+# ------------- blacklist & activity -------------
+
+def resolve_blacklisted_apps(ctx: GraphQLContext, info) -> List[BlacklistedApp]:
+    """The blacklist, oldest entry first. Admin only."""
+    if not ctx.can_admin:
+        return []
+    return [BlacklistedApp(
+        app_id=r.app_id,
+        note=r.note,
+        created_at=_iso(r.created_at),
+    ) for r in db.session.execute(text(
+        "SELECT app_id, note, created_at FROM app_blacklist "
+        "ORDER BY created_at, app_id")).all()]
+
+
+def resolve_activity(kind: Optional[ActivityKind], limit: int,
+                     ctx: GraphQLContext, info) -> List[ActivityEvent]:
+    """Captured user actions, newest first. Admin only."""
+    if not ctx.can_admin:
+        return []
+    limit = max(1, min(limit, 500))
+    params: dict = {"limit": limit}
+    where = ""
+    if kind:
+        params["kind"] = kind.value
+        where = " WHERE kind = :kind"
+    rows = db.session.execute(text(f"""
+        SELECT id, ts, kind, username, client, device_uid, ip, filename, size, detail
+        FROM activity_events{where}
+        ORDER BY id DESC
+        LIMIT :limit
+    """), params).all()
+    out = []
+    for r in rows:
+        try:
+            event_kind = ActivityKind(r.kind)
+        except ValueError:
+            continue
+        out.append(ActivityEvent(
+            id=strawberry.ID(str(r.id)),
+            ts=_iso(r.ts),
+            kind=event_kind,
+            username=r.username,
+            client=r.client,
+            device_uid=r.device_uid,
+            ip=r.ip,
+            filename=r.filename,
+            size=r.size,
+            detail=r.detail,
+        ))
+    return out

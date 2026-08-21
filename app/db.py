@@ -196,6 +196,18 @@ class Titles(db.Model):
     up_to_date = db.Column(db.Boolean, default=False)
     complete = db.Column(db.Boolean, default=False)
 
+
+class BlacklistedApp(db.Model):
+    """An app id deliberately excluded from "what's missing" - typically language-pack
+    DLCs. Blacklisted apps don't count against a title's complete/up_to_date flags and
+    are never picked as download targets, but a file that lands for one is still
+    identified and served normally."""
+    __tablename__ = 'app_blacklist'
+
+    app_id = db.Column(db.String, primary_key=True)  # 16 hex, UPPERCASE like apps.app_id
+    note = db.Column(db.String)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
 # Association table for many-to-many relationship between Apps and Files.
 # The composite PK indexes (app_id, file_id) left-to-right, so the explicit
 # index on file_id is what makes back-link queries (WHERE file_id IN ...) fast.
@@ -344,6 +356,50 @@ class Download(db.Model):
 
     __table_args__ = (db.UniqueConstraint('app_id', 'app_version',
                                           name='uq_downloads_app_version'),)
+
+
+# How many activity events to keep; the table is pruned after every insert.
+# A small shop does not generate more, and SQLite stays fast at this size.
+ACTIVITY_MAX_EVENTS = 1000
+
+
+class ActivityEvent(db.Model):
+    """One user-visible action: a shop client connecting, a file download, or a web
+    login (success or failure). Written at the point of the action and read by the
+    admin activity feed; pruned to the newest ACTIVITY_MAX_EVENTS rows."""
+    __tablename__ = 'activity_events'
+
+    id = db.Column(db.Integer, primary_key=True)
+    ts = db.Column(db.DateTime, default=datetime.datetime.utcnow, index=True)
+    kind = db.Column(db.String)      # shop_connect | download | login | login_failed
+    username = db.Column(db.String)  # basic-auth user, form user, or null
+    client = db.Column(db.String)    # tinfoil | cyberfoil | sphaira | web
+    device_uid = db.Column(db.String)  # the Switch's Uid header, when sent
+    ip = db.Column(db.String)
+    filename = db.Column(db.String)  # for downloads: the file served
+    size = db.Column(db.Integer)     # for downloads: bytes
+    detail = db.Column(db.String)    # free-form extra (e.g. auth error reason)
+
+
+def record_activity(**kwargs):
+    """Insert one activity event and prune the table to the retention cap.
+
+    Deliberately swallows nothing: callers wrap it where a failed audit row must not
+    break the action being audited. Commits its own session scope.
+    """
+    event = ActivityEvent(**kwargs)
+    db.session.add(event)
+    db.session.commit()
+    try:
+        cutoff = db.session.query(ActivityEvent.id).order_by(
+            ActivityEvent.id.desc()).offset(ACTIVITY_MAX_EVENTS - 1).first()
+        if cutoff:
+            ActivityEvent.query.filter(ActivityEvent.id < cutoff[0]).delete()
+            db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logging.getLogger('main').warning(f'Activity pruning failed: {e}')
+    return event
 
 
 def add_temp_file(filepath):
@@ -776,3 +832,57 @@ def delete_download(download_id):
     db.session.delete(download)
     db.session.commit()
     return True
+
+
+# --- Blacklist ---
+
+def normalize_app_id(app_id):
+    """Uppercase 16-hex app id, or '' when the input is not one."""
+    text = str(app_id or '').strip()
+    if text.lower().startswith('0x'):
+        text = text[2:]
+    if len(text) != 16:
+        return ''
+    try:
+        return f'{int(text, 16):016X}'
+    except ValueError:
+        return ''
+
+
+def get_blacklisted_app_ids():
+    """The blacklisted app id set, read once per caller pass."""
+    return {r.app_id for r in BlacklistedApp.query.with_entities(BlacklistedApp.app_id).all()}
+
+
+def is_app_blacklisted(app_id):
+    return BlacklistedApp.query.filter_by(app_id=app_id).first() is not None
+
+
+def upsert_blacklisted_app(app_id, note=None):
+    """Insert or update one blacklist entry. Returns (ok, error)."""
+    normalized = normalize_app_id(app_id)
+    if not normalized:
+        return False, f'Not a valid 16-hex app id: {app_id!r}'
+    row = BlacklistedApp.query.get(normalized)
+    if row:
+        if note is not None:
+            row.note = str(note)
+    else:
+        db.session.add(BlacklistedApp(app_id=normalized, note=note))
+    db.session.commit()
+    return True, None
+
+
+def delete_blacklisted_app(app_id):
+    """Remove one entry. Returns False when it was not blacklisted."""
+    normalized = normalize_app_id(app_id)
+    row = BlacklistedApp.query.get(normalized) if normalized else None
+    if not row:
+        return False
+    db.session.delete(row)
+    db.session.commit()
+    return True
+
+
+def get_all_blacklisted_apps():
+    return BlacklistedApp.query.order_by(BlacklistedApp.created_at).all()

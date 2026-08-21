@@ -241,6 +241,45 @@ class Mutation:
         return bool(ok)
 
     @described_mutation
+    def blacklist_app(
+        self, info: Info,
+        app_id: Annotated[strawberry.ID, strawberry.argument(
+            description="The 16-hex-digit application id to blacklist (case-insensitive, "
+                        "0x prefix tolerated).")],
+        note: Annotated[Optional[str], strawberry.argument(
+            description="Why - free-form, shown next to the entry. Null keeps the "
+                        "existing note on re-blacklisting.")] = None,
+    ) -> bool:
+        """Add (or annotate) one app id on the blacklist. Blacklisted content stops
+        counting against its title's complete/up-to-date flags and is never a
+        download target; every affected title's flags are recomputed right away."""
+        from db import upsert_blacklisted_app
+        import tasks as tasks_mod
+        _require_admin(info.context)
+        ok, err = upsert_blacklisted_app(str(app_id), note)
+        if not ok:
+            raise MutationFailed(err)
+        tasks_mod.enqueue_task('update_titles')
+        return True
+
+    @described_mutation
+    def unblacklist_app(
+        self, info: Info,
+        app_id: Annotated[strawberry.ID, strawberry.argument(
+            description="The 16-hex-digit application id to take off the blacklist.")],
+    ) -> bool:
+        """Remove one app id from the blacklist, so its content counts as missing
+        again. False when it was not blacklisted; flags are recomputed either way
+        the entry existed."""
+        from db import delete_blacklisted_app
+        import tasks as tasks_mod
+        _require_admin(info.context)
+        if not delete_blacklisted_app(str(app_id)):
+            return False
+        tasks_mod.enqueue_task('update_titles')
+        return True
+
+    @described_mutation
     def run_downloader(
         self, info: Info,
         source: Annotated[DownloadSource, strawberry.argument(

@@ -33,9 +33,13 @@ There are three main pages: the library view, the setup guide, and under `Admin`
 
 ## Library view
 
-The landing page, a grid view of your whole library, with labels and filtering to highlight owned and missing content.
+The landing page: one card per game. Each card carries three indicators - base game owned, updates current, DLC set complete - plus a live badge while something of that game is downloading. Clicking a card opens the game's detail page.
 
-You can filter by type (base game or DLC), by ownership, by whether an update is missing, and by whether the DLC set is complete. There is also a search box, a card and an icon view, a card size slider and a page size selector. The version badge on a card opens a popover listing every known version of that title with its release date, and whether you own it.
+You can filter by update currency and by DLC completion, and there is a search box, a card and an icon view, a card size slider and a page size selector. Note the flags are blacklist-aware: a blacklisted DLC never keeps a game from reading complete.
+
+## Game detail page
+
+Everything about one game family, reached by clicking its card in the library: the header shows the art, title id, publisher, release date and the three overall indicators; below, the base game (with the files that carry it and their sizes), every update version with its release date and owned/missing state, and every DLC - owned, missing, or blacklisted with its note. Admins can blacklist/unblacklist a DLC right from this page.
 
 ## Setup page
 
@@ -63,6 +67,10 @@ Admin only. Two ways to bring games you do not own yet into the library:
 
 - **Ghost eShop**: search the catalog by name, pick a game, and choose among its base, updates and DLCs (with real sizes and owned badges). Queued items download into the game's own folder on the next Ghost eShop pass - or run it right away from Update Library.
 - **Torrents**: search your Jackett indexers with free text and hand any result straight to qBittorrent, using the torrents source's save path and category.
+
+## Activity page
+
+Admin only, live. Who connects to the shop (and from which Switch, when the client sends its device id), every file download with its user and size, and web logins - successes and failures. Filter by kind; the newest 1000 events are kept, so the page doubles as a lightweight audit trail.
 
 ## Stats page
 
@@ -332,6 +340,10 @@ The second setting ensures CPU/disk heavy tasks do not loose the benefit of para
 ## Downloader
 
 Two download sources coexist under one section. Each has its own enable switch, credentials, schedule interval and manual trigger, and both draw from the same missing-content work list without ever racing for the same target (one row per app id + version).
+
+### Blacklist
+
+App ids on the blacklist (Settings → Blacklist, or inline from a game's detail page) are deliberately unwanted content - typically language-pack DLCs. A blacklisted app stops counting against its game's complete/up-to-date indicators, never appears as missing content, and no source will download it; a file that lands for one anyway is still identified and served. The section also imports the switch-library-updater `blacklist.json` format (ids or `{id, note}` objects) in one upload.
 
 ### Torrents source
 

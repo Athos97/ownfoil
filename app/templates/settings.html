@@ -756,6 +756,55 @@
                         onClick='submitGhostSettings()'>Submit</button>
                 </div>
 
+                <hr class="hr-settings">
+                <h2 class="pb-2">Blacklist</h2>
+                <p>App ids excluded from missing content: a blacklisted DLC or update no
+                    longer keeps its game from reading complete / up to date, and no
+                    download source will ever chase it. The file itself, if present in
+                    the library, keeps working normally.</p>
+
+                <div class="row mb-3">
+                    <div class="col-7">
+                        <label for="blacklistIdInput" class="form-label">Add by app id:</label>
+                        <input type="text" class="form-control" id="blacklistIdInput"
+                            aria-describedby="blacklistIdHelp" placeholder="0100A1B2C3D4E001">
+                        <div id="blacklistIdFeedback"></div>
+                        <div id="blacklistIdHelp" class="form-text">16 hex digits; case and
+                            a 0x prefix don't matter.</div>
+                    </div>
+                    <div class="col-3">
+                        <label for="blacklistNoteInput" class="form-label">Note:</label>
+                        <input type="text" class="form-control" id="blacklistNoteInput"
+                            placeholder="Language pack JP">
+                    </div>
+                    <div class="col-2 d-flex align-items-end">
+                        <button type="button" id="blacklistAddBtn" class="btn btn-primary w-100"
+                            onClick='addBlacklistEntry()'>Add</button>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label for="blacklistImportInput" class="form-label">Import from JSON:</label>
+                    <input type="file" class="form-control" id="blacklistImportInput" accept=".json">
+                    <div class="form-text">switch-library-updater format: a list of ids or
+                        {"id", "note"} objects. Existing entries keep their note unless the
+                        file provides one.</div>
+                    <div id="blacklistImportResult"></div>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                        <thead><tr>
+                            <th scope="col">App ID</th>
+                            <th scope="col">Note</th>
+                            <th scope="col">Added</th>
+                            <th scope="col"></th>
+                        </tr></thead>
+                        <tbody id="blacklistBody"></tbody>
+                    </table>
+                </div>
+                <p id="blacklistEmpty" class="text-secondary fst-italic">Nothing blacklisted.</p>
+
             </div>
 {% endblock %}
 
@@ -1723,9 +1772,140 @@
         });
     }
 
+    // --- Blacklist ---
+
+    const BLACKLIST_QUERY = `query { blacklistedApps { appId note createdAt } }`;
+    const BLACKLIST_MUTATION = `
+        mutation Bl($appId: ID!, $note: String) {
+            blacklistApp(appId: $appId, note: $note)
+        }`;
+    const UNBLACKLIST_MUTATION = `
+        mutation Unbl($appId: ID!) {
+            unblacklistApp(appId: $appId)
+        }`;
+
+    async function gqlSend(query, variables) {
+        const r = await fetch('/api/graphql', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify({query: query, variables: variables || {}}),
+        });
+        if (!r.ok) throw new Error(`GraphQL HTTP ${r.status}`);
+        const body = await r.json();
+        if (body.errors && body.errors.length) {
+            throw new Error('GraphQL errors: ' + JSON.stringify(body.errors));
+        }
+        return body.data;
+    }
+
+    function renderBlacklist(entries) {
+        const tbody = document.getElementById('blacklistBody');
+        const empty = document.getElementById('blacklistEmpty');
+        tbody.innerHTML = '';
+        empty.classList.toggle('d-none', entries.length > 0);
+        entries.forEach(e => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td class="font-monospace small"></td>
+                <td class="text-secondary small"></td>
+                <td class="text-secondary small"></td>
+                <td class="text-end">
+                    <button type="button" class="icon-btn bl-remove" data-id="${e.appId}" title="Remove">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>`;
+            tr.children[0].textContent = e.appId;
+            tr.children[1].textContent = e.note || '—';
+            tr.children[2].textContent = e.createdAt
+                ? new Date(e.createdAt).toLocaleDateString() : '';
+            tbody.appendChild(tr);
+        });
+    }
+
+    async function loadBlacklist() {
+        try {
+            const params = new URLSearchParams({query: BLACKLIST_QUERY});
+            const r = await fetch('/api/graphql?' + params.toString(), {
+                headers: {'Accept': 'application/json'},
+                credentials: 'same-origin',
+            });
+            const body = await r.json();
+            if (body.errors) throw new Error(JSON.stringify(body.errors));
+            renderBlacklist(body.data.blacklistedApps || []);
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    async function addBlacklistEntry() {
+        const appId = getInputVal("blacklistIdInput").trim();
+        const note = getInputVal("blacklistNoteInput").trim() || null;
+        if (!appId) return;
+        $('#blacklistAddBtn').prop('disabled', true);
+        try {
+            await gqlSend(BLACKLIST_MUTATION, {appId: appId, note: note});
+            setInputVal("blacklistIdInput", '');
+            setInputVal("blacklistNoteInput", '');
+            $('#blacklistIdFeedback').text('');
+            loadBlacklist();
+        } catch (e) {
+            console.error(e);
+            $('#blacklistIdFeedback').text('Not a valid 16-hex app id.');
+            $('#blacklistIdFeedback').addClass('invalid-feedback d-block');
+            $("#blacklistIdInput").addClass('is-invalid');
+        } finally {
+            $('#blacklistAddBtn').prop('disabled', false);
+        }
+    }
+
+    document.getElementById('blacklistBody').addEventListener('click', async e => {
+        const btn = e.target.closest('.bl-remove');
+        if (!btn) return;
+        btn.disabled = true;
+        try {
+            await gqlSend(UNBLACKLIST_MUTATION, {appId: btn.dataset.id});
+            loadBlacklist();
+        } catch (err) {
+            console.error(err);
+            btn.disabled = false;
+        }
+    });
+
+    document.getElementById('blacklistImportInput').addEventListener('change', async e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const result = document.getElementById('blacklistImportResult');
+        result.innerHTML = '<span class="text-secondary">Importing…</span>';
+        const form = new FormData();
+        form.append('file', file);
+        try {
+            const r = await fetch('/api/blacklist/import', {
+                method: 'POST', body: form, credentials: 'same-origin',
+            });
+            const body = await r.json();
+            if (body.success) {
+                let msg = `Imported ${body.imported} entrie(s).`;
+                if (body.invalid && body.invalid.length) {
+                    msg += ` Skipped ${body.invalid.length} invalid id(s): ${body.invalid.join(', ')}`;
+                }
+                result.innerHTML = `<div class="alert alert-success py-2 mt-2">${msg}</div>`;
+                loadBlacklist();
+            } else {
+                result.innerHTML = `<div class="alert alert-danger py-2 mt-2">${
+                    (body.errors || ['Import failed.']).join(' ')}</div>`;
+            }
+        } catch (err) {
+            console.error(err);
+            result.innerHTML = '<div class="alert alert-danger py-2 mt-2">Import failed.</div>';
+        }
+        e.target.value = '';
+    });
+
     $(document).ready(function () {
         fillUserTable();
         fillLibraryTable();
+        loadBlacklist();
 
         // Add real-time password validation
         $('#inputNewUserPassword').on('input', function() {

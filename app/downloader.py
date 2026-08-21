@@ -54,8 +54,12 @@ def _ext_of(title):
 
 
 def get_missing_targets():
-    """Latest-version unowned UPDATE/DLC apps, with a display name from titledb."""
+    """Latest-version unowned UPDATE/DLC apps, with a display name from titledb.
+
+    Blacklisted apps are skipped: they are deliberately not wanted content, so no
+    source should ever search for or download them."""
     targets = []
+    blacklisted = get_blacklisted_app_ids()
     titles = get_all_titles()
     for title in titles:
         title_id = title.title_id
@@ -66,7 +70,7 @@ def get_missing_targets():
         upd_apps = [a for a in apps if a.get('app_type') == APP_TYPE_UPD]
         if upd_apps:
             best = max(upd_apps, key=lambda a: int(a.get('app_version') or 0))
-            if not best.get('owned'):
+            if not best.get('owned') and best.get('app_id') not in blacklisted:
                 ver = str(best.get('app_version'))
                 targets.append({
                     'title_id': title_id,
@@ -81,6 +85,8 @@ def get_missing_targets():
         by_id = {}
         for a in dlc_apps:
             aid = a.get('app_id')
+            if aid in blacklisted:
+                continue
             cur = by_id.get(aid)
             if cur is None or int(a.get('app_version') or 0) > int(cur.get('app_version') or 0):
                 by_id[aid] = a

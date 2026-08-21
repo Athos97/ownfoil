@@ -339,6 +339,51 @@ class VerificationStatusCount:
 
 
 @described(strawberry.type)
+class BlacklistedApp:
+    """One blacklist entry: an app id deliberately excluded from missing-content
+    tracking. Admin only."""
+    app_id: str = desc("The 16-hex-digit application id, uppercase.")
+    note: Optional[str] = desc("Why it is blacklisted, free-form. Null when never "
+                               "explained.", default=None)
+    created_at: Optional[str] = desc("When the entry was added, ISO 8601.",
+                                     default=None)
+
+
+@described(strawberry.enum)
+class ActivityKind(Enum):
+    """What the user did. The set is closed - the activity page filters on it."""
+    SHOP_CONNECT = strawberry.enum_value(
+        "shop_connect", description="A shop client (Tinfoil/CyberFoil/Sphaira) fetched "
+                                    "the catalogue.")
+    DOWNLOAD = strawberry.enum_value(
+        "download", description="A file was served for download.")
+    LOGIN = strawberry.enum_value(
+        "login", description="A successful web login.")
+    LOGIN_FAILED = strawberry.enum_value(
+        "login_failed", description="A web login that failed.")
+
+
+@described(strawberry.type)
+class ActivityEvent:
+    """One captured user action, newest first from the `activity` query. Admin only."""
+    id: strawberry.ID = desc("Primary key of the event row.")
+    ts: Optional[str] = desc("When it happened, ISO 8601 UTC.", default=None)
+    kind: ActivityKind = desc("What the user did.")
+    username: Optional[str] = desc("Who: the basic-auth/shop user, or the form user "
+                                   "for web logins. Null when anonymous.", default=None)
+    client: Optional[str] = desc("Through what: tinfoil, cyberfoil, sphaira or web.",
+                                 default=None)
+    device_uid: Optional[str] = desc("The Switch device id the client sent, when it "
+                                     "sends one.", default=None)
+    ip: Optional[str] = desc("Where from, as the server saw it.", default=None)
+    filename: Optional[str] = desc("For downloads: the file served.", default=None)
+    size: Optional[BigInt] = desc("For downloads: the file's size in bytes.",
+                                  default=None)
+    detail: Optional[str] = desc("Free-form extra, e.g. why a login failed.",
+                                 default=None)
+
+
+@described(strawberry.type)
 class UnidentifiedFile:
     """One file ownfoil could not identify, with the reason it last failed - the
     detail behind the stats `unidentifiedFiles` count. Admin only."""
@@ -540,6 +585,9 @@ class TitledbDlc:
     version: Optional[int] = desc(
         "Highest version titledb knows for this DLC. Null when it says nothing.",
         default=None)
+    blacklisted: bool = desc(
+        "The DLC's app id is on the blacklist - wanted nowhere, so it does not count "
+        "as missing content for the title.", default=False)
     titledb: Optional["Title"] = desc(
         "The DLC's own catalogue metadata - its name and art, which is what a "
         "'missing DLC' list needs to show. Null when titledb has no entry for it.",
@@ -567,6 +615,11 @@ class App:
         "At least one file in the library carries this app. Under "
         "`apps(groupByAppId: true)` this is group-level: true when any version of the "
         "app id is owned, even though the item shown is the highest version.")
+    blacklisted: bool = desc(
+        "This app id is on the blacklist: it does not count against the title's "
+        "complete/up-to-date flags and is never a download target. The app can still "
+        "be owned - a file that lands for it is identified and served normally.",
+        default=False)
     release_date: Optional[str] = desc(
         "When this version shipped. Populated for UPDATE rows; null on BASE and DLC "
         "rows, whose date lives on `titledb.releaseDate`.", default=None)
