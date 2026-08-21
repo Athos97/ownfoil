@@ -111,6 +111,9 @@
 
     async function gql(query, variables) {
         const params = new URLSearchParams({query: query});
+        if (variables && Object.keys(variables).length) {
+            params.set('variables', JSON.stringify(variables));
+        }
         const r = await fetch('/api/graphql?' + params.toString(), {
             headers: {'Accept': 'application/json'},
             credentials: 'same-origin',
@@ -168,7 +171,7 @@
             renderGhostResults(data.ghostshopSearch || []);
         } catch (e) {
             console.error(e);
-            toast('Ghost eShop search failed - are the credentials configured?', 'danger');
+            toast(`Ghost eShop search failed: ${e.message}`, 'danger');
         } finally {
             document.getElementById('ghostSearchBtn').disabled = false;
         }
