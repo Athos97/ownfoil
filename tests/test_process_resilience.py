@@ -432,3 +432,54 @@ def test_queue_skips_content_owned_under_another_version(library):
             'appType': 'UPDATE', 'name': 'Zelda', 'fileName': 'x.nsz'}]}})
     assert resp.get_json()['data']['queueGhosteshopDownloads'] == 0
     assert Download.query.filter_by(app_id=ZELDA_UPD_TID).count() == 0
+
+
+# --- trash removes the partial content ---
+
+def test_delete_paused_row_sweeps_its_part_files(library, portal, tmp_path):
+    """Trashing a paused Ghost download removes the row AND the half-fetched
+    bytes from disk - not at the next pass's orphan GC, now."""
+    settings = ghost_settings(portal, tmp_path)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(downloader_lib, 'get_settings', lambda: settings)
+
+    row = downloader_lib.queue_ghosteshop_download(
+        title_id=ZELDA_TID, app_id=ZELDA_UPD_TID, app_version='1114112',
+        app_type='UPDATE', name='Zelda BOTW')
+    downloader_lib.update_download(row.id, status='paused', progress=30,
+                                   torrent_name=ZELDA_UPD_NAME)
+
+    part = tmp_path / 'Zelda' / (ZELDA_UPD_NAME + '.part')
+    state = tmp_path / 'Zelda' / (ZELDA_UPD_NAME + '.part.state')
+    part.parent.mkdir(exist_ok=True)
+    part.write_bytes(b'half a game')
+    state.write_text('{}')
+
+    assert downloader_lib.delete_download_row(row.id)
+
+    assert get_download_by_app(ZELDA_UPD_TID, '1114112') is None
+    assert not part.exists(), "the partial file went with the row"
+    assert not state.exists()
+    monkeypatch.undo()
+
+
+def test_delete_torrent_row_leaves_qbittorrent_data_alone(library, tmp_path):
+    """Torrents rows delete the row only: qBittorrent's data is its own."""
+    row = _torrent_row(status='paused')
+    # A same-named file existing in a library root must survive - it is not
+    # ownfoil's to remove.
+    stray = tmp_path / 'stray.nsp'
+    stray.write_bytes(b'not ours')
+
+    assert downloader_lib.delete_download_row(row.id)
+    assert get_download_by_id(row.id) is None
+    assert stray.exists()
+
+
+def test_delete_row_without_part_is_just_the_row(library):
+    """A queued row that never transferred (no torrent_name) sweeps nothing."""
+    row = downloader_lib.queue_ghosteshop_download(
+        title_id=ZELDA_TID, app_id='01007EF00011F009', app_version='0',
+        app_type='DLC', name='Never started')
+    assert downloader_lib.delete_download_row(row.id)
+    assert Download.query.filter_by(app_id='01007EF00011F009').count() == 0

@@ -494,9 +494,10 @@ class Mutation:
         id: Annotated[strawberry.ID, strawberry.argument(
             description="Primary key of the download row to remove.")],
     ) -> bool:
-        """Remove a download row from the queue. Only the row: qBittorrent keeps the
-        torrent and the disk keeps whatever it already fetched. False when there was
-        nothing to remove."""
-        from db import delete_download as db_delete_download
+        """Remove a download row and everything it fetched so far: for Ghost eShop
+        rows the partial `.part` files are deleted from disk along with the row.
+        qBittorrent keeps its own torrents and data. False when there was nothing
+        to remove."""
+        import downloader as downloader_lib
         _require_admin(info.context)
-        return db_delete_download(int(id))
+        return downloader_lib.delete_download_row(int(id))

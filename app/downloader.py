@@ -970,6 +970,50 @@ def delete_completed_downloads():
     return removed
 
 
+def _delete_ghost_parts_for(d):
+    """Remove this row's .part/.part.state files from the ghost library roots.
+
+    Names are matched by exact comparison, not by glob pattern: catalog names
+    carry glob-special characters ([titleId][version]) that a pattern match
+    would misinterpret. Returns how many files went."""
+    if (d.source or SOURCE_TORRENTS) != SOURCE_GHOSTESHOP or not d.torrent_name:
+        return 0
+    from pathlib import Path as _Path
+    wanted = {d.torrent_name + '.part', d.torrent_name + '.part.state'}
+    removed = 0
+    for root in _ghost_library_roots():
+        try:
+            candidates = list(_Path(root).rglob('*.part*'))[:500]
+        except OSError:
+            continue
+        for path in candidates:
+            if path.name in wanted:
+                try:
+                    path.unlink(missing_ok=True)
+                    removed += 1
+                except OSError as e:
+                    logger.warning(f"[downloads] Could not remove {path}: {e}")
+    return removed
+
+
+def delete_download_row(download_id):
+    """Delete one downloads row - and, for Ghost eShop rows, the partial files
+    it left on disk. A trashed download must not keep its half-fetched bytes
+    (the orphan GC would only catch them at the next pass, a day out).
+
+    qBittorrent keeps its own torrents and data: its queue is not ours to wipe."""
+    d = get_download_by_id(download_id)
+    if d is None:
+        return False
+    parts = _delete_ghost_parts_for(d)
+    db.session.delete(d)
+    db.session.commit()
+    if parts:
+        logger.info(f"[downloads] Deleted row {download_id} with {parts} "
+                    "partial file(s) swept from disk.")
+    return True
+
+
 def retry_download(download_id, settings):
     """Re-run a failed download from scratch through its own source.
 

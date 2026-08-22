@@ -60,6 +60,7 @@ Admin only. Every transfer the downloaders have picked: torrents handed to qBitt
 - **Pause / resume** per row: pausing a Ghost eShop transfer cancels it and keeps the partial file; resuming continues from it when still valid (an expired token restarts the transfer from scratch). Torrents pause and resume in qBittorrent - including pauses made from qBittorrent's own UI, which the next pass reflects.
 - **Stop all** pauses every unfinished download (queued and transferring, both sources) - rows stay, each resumable.
 - **Delete finished** clears the completed rows; failed ones stay retryable until dismissed.
+- The per-row trash removes the row and everything it fetched: a Ghost eShop row's partial file goes from disk with it. qBittorrent keeps its own torrents and data.
 
 ## Manage Library page
 
