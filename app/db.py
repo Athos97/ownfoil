@@ -835,6 +835,16 @@ def is_app_owned(app_id, app_version):
     return bool(app and app.owned)
 
 
+def is_app_id_owned(app_id):
+    """Whether the library holds ANY version of this app id - the question Add
+    Content should ask: re-downloading another version of content you already
+    have (same DLC, older update) is never what the user means by 'add'."""
+    if not app_id:
+        return False
+    return db.session.query(
+        Apps.id).filter(Apps.app_id == app_id, Apps.owned.is_(True)).first() is not None
+
+
 def complete_downloads_for_apps(app_versions):
     """Flip download rows to completed for content the library just identified.
 

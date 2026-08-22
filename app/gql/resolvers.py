@@ -1370,7 +1370,7 @@ def resolve_ghostshop_game(tid: str, ctx: GraphQLContext, info) -> Optional[Ghos
     if not ctx.can_admin:
         return None
     from ghostshop import GhostshopError
-    from db import is_app_owned
+    from db import is_app_id_owned
     try:
         provider, _settings = _ghostshop_provider(ctx)
         session = provider.login()
@@ -1391,7 +1391,7 @@ def resolve_ghostshop_game(tid: str, ctx: GraphQLContext, info) -> Optional[Ghos
             category=app_type,
             version=e.version,
             size=e.size or None,
-            owned=is_app_owned(e.tid, str(e.version)),
+            owned=is_app_id_owned(e.tid),
         ))
     return GhostshopGame(title=card.title, base_tid=tid.upper(), entries=entries)
 

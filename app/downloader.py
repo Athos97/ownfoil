@@ -778,6 +778,38 @@ def run_downloader_job(settings=None, progress=None):
         logger.error(f'Downloader job (torrents) failed: {e}')
 
 
+def stop_all_downloads():
+    """Full stop: cancel every live downloader task, wipe the downloads table
+    and delete the orphaned .part files. What the admin means by 'stop and
+    delete everything' - nothing queued, nothing transferring, no residue.
+
+    qBittorrent keeps its own torrents (its queue is not ours to wipe); rows
+    and files owned by ownfoil all go."""
+    import tasks as tasks_mod
+
+    # Cancel the passes first (walks pending children away), then any live
+    # per-file task - cancel restarts the driving worker, killing the transfer.
+    rows = db.session.execute(text(
+        "SELECT id FROM tasks WHERE task_name IN (:pass_task, :file_task) "
+        "AND status IN ('pending', 'running', 'waiting_for_children') "
+        "ORDER BY id").bindparams(pass_task='downloader_ghosteshop_run',
+                                  file_task=GHOSTESHOP_DOWNLOAD_TASK)).all()
+    for (task_id,) in rows:
+        try:
+            tasks_mod.cancel_task(task_id)
+        except Exception as e:
+            logger.warning(f"[stop] Cancelling task {task_id} failed: {e}")
+
+    removed = Download.query.count()
+    Download.query.delete()
+    db.session.commit()
+
+    # Rows are gone, so every .part is an orphan now.
+    _gc_orphan_part_files()
+    logger.info(f"[stop] Downloads wiped: {removed} row(s), tasks cancelled: {len(rows)}.")
+    return removed
+
+
 def retry_download(download_id, settings):
     """Re-run a failed download from scratch through its own source.
 

@@ -9,7 +9,9 @@
                 qBittorrent, direct transfers from Ghost eShop. A row completes when the
                 library has identified the file.</p>
         </div>
-        <div class="ms-auto">
+        <div class="ms-auto d-flex gap-2">
+            <button type="button" id="stopDownloadsBtn" class="btn btn-danger"
+                onClick="stopAllDownloads()">Stop &amp; delete all</button>
             <button type="button" id="runTorrentsBtn" class="btn btn-primary"
                 onClick="runDownloaderNow('TORRENTS')">Run torrents now</button>
             <button type="button" id="runGhostBtn" class="btn btn-primary"
@@ -63,6 +65,24 @@
         mutation Run($source: DownloadSource!) {
             runDownloader(source: $source) { id status }
         }`;
+
+    const STOP_MUTATION = `
+        mutation Stop { stopDownloads }`;
+
+    async function stopAllDownloads() {
+        if (!confirm('Stop every download and DELETE all rows and partial files?')) {
+            return;
+        }
+        const btn = $('#stopDownloadsBtn').prop('disabled', true);
+        try {
+            await mutate(STOP_MUTATION);
+            // The realtime topic will drain the table; nothing else to do.
+        } catch (e) {
+            console.error(e);
+        } finally {
+            btn.prop('disabled', false);
+        }
+    }
 
     async function runDownloaderNow(source) {
         const btn = source === 'TORRENTS' ? $('#runTorrentsBtn') : $('#runGhostBtn');

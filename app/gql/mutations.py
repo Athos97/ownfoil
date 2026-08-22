@@ -280,6 +280,16 @@ class Mutation:
         return True
 
     @described_mutation
+    def stop_downloads(self, info: Info) -> int:
+        """Stop everything and delete it: live downloader tasks are cancelled
+        (running transfers are killed), every downloads row is removed - history
+        included - and the partial .part files on disk are wiped. qBittorrent's
+        own queue is left alone. Returns the number of rows removed."""
+        import downloader as downloader_lib
+        _require_admin(info.context)
+        return downloader_lib.stop_all_downloads()
+
+    @described_mutation
     def run_downloader(
         self, info: Info,
         source: Annotated[DownloadSource, strawberry.argument(
@@ -320,12 +330,12 @@ class Mutation:
         queued are skipped, and one row per (app id, version) target is kept."""
         import tasks as tasks_mod
         import downloader as downloader_lib
-        from db import get_download_by_app, is_app_owned
+        from db import get_download_by_app, is_app_id_owned
         _require_admin(info.context)
         queued = 0
         for e in entries:
-            if is_app_owned(e.app_id, str(e.app_version)):
-                continue
+            if is_app_id_owned(e.app_id):
+                continue  # already in the library (any version): not addable content
             if get_download_by_app(e.app_id, str(e.app_version)) is not None:
                 continue
             downloader_lib.queue_ghosteshop_download(

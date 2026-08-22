@@ -218,3 +218,69 @@ def test_failed_rows_arm_an_early_retry(library, monkeypatch):
     from datetime import datetime as _dt
     delta = row.run_after.replace(tzinfo=None) - _dt.utcnow()
     assert delta.total_seconds() < 16 * 60, "first retry within ~15 minutes"
+
+
+# --- stop & wipe ---
+
+def test_stop_all_cancels_tasks_wipes_rows_and_parts(library, portal, tmp_path):
+    """'Stop & delete all': tasks cancelled, every downloads row gone (history
+    included) and the .part residue wiped from disk."""
+    settings = ghost_settings(portal, tmp_path)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(tasks_mod, 'get_settings', lambda: settings)
+    monkeypatch.setattr(downloader_lib, 'get_settings', lambda: settings)
+
+    downloader_lib.queue_ghosteshop_download(
+        title_id=ZELDA_TID, app_id=ZELDA_UPD_TID, app_version='1114112',
+        app_type='UPDATE', name='Zelda BOTW')
+    pass_task = tasks_mod.enqueue_task('downloader_ghosteshop_run', {'manual': True})[0]
+    child = tasks_mod.create_child_task(
+        pass_task.id, downloader_lib.GHOSTESHOP_DOWNLOAD_TASK,
+        {'app_id': ZELDA_UPD_TID, 'app_version': '1114112'})
+    db.session.add(Task(task_name='ghosteshop_download', status='running',
+                        worker_id=99, input_hash='h2',
+                        input_json='{"app_id": "0100AA000000E800", "app_version": "65536"}'))
+    db.session.commit()
+
+    part = tmp_path / 'Zelda' / (ZELDA_UPD_NAME + '.part')
+    part.parent.mkdir(exist_ok=True)
+    part.write_bytes(b'partial bytes')
+    (tmp_path / 'Zelda' / (ZELDA_UPD_NAME + '.part.state')).write_text('{}')
+
+    removed = downloader_lib.stop_all_downloads()
+
+    assert removed >= 1
+    assert Download.query.count() == 0
+    assert Task.query.filter(Task.task_name.in_(
+        ['downloader_ghosteshop_run', 'ghosteshop_download'])).count() == 0
+    assert not part.exists()
+    assert not (tmp_path / 'Zelda' / (ZELDA_UPD_NAME + '.part.state')).exists()
+    monkeypatch.undo()
+
+
+# --- add content: owned by any version ---
+
+def test_queue_skips_content_owned_under_another_version(library):
+    from db import Apps, Titles as TitlesRow, is_app_id_owned
+    title = TitlesRow(title_id=ZELDA_TID, have_base=True)
+    db.session.add(title)
+    db.session.flush()
+    db.session.add(Apps(title_id=title.id, app_id=ZELDA_UPD_TID,
+                        app_version='65536', app_type='UPDATE', owned=True))
+    db.session.commit()
+
+    assert is_app_id_owned(ZELDA_UPD_TID)
+    assert not is_app_id_owned('0100FF00FF00F800')
+
+    # The mutation path: queueing version 131072 (not the owned 65536) is a no-op.
+    from gql import graphql_dispatch
+    app = library
+    app.add_url_rule('/api/graphql', view_func=graphql_dispatch,
+                     methods=['GET', 'POST'])
+    resp = app.test_client().post('/api/graphql', json={
+        'query': 'mutation($e: [QueuedDownloadInput!]!) { queueGhosteshopDownloads(entries: $e) }',
+        'variables': {'e': [{
+            'titleId': ZELDA_TID, 'appId': ZELDA_UPD_TID, 'appVersion': 131072,
+            'appType': 'UPDATE', 'name': 'Zelda', 'fileName': 'x.nsz'}]}})
+    assert resp.get_json()['data']['queueGhosteshopDownloads'] == 0
+    assert Download.query.filter_by(app_id=ZELDA_UPD_TID).count() == 0
