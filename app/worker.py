@@ -29,7 +29,18 @@ class TaskWorker:
             cursor.execute("BEGIN IMMEDIATE")
 
             # Exclude task types whose concurrency group is already at its limit.
-            cursor.execute("SELECT task_name FROM tasks WHERE status = 'running'")
+            # Only rows whose worker is alive (or unknown owner) count: a ghost
+            # row from a dead worker must not pin the group's slots - with io=1
+            # it would idle every remaining worker until the watchdog reaps it.
+            live_ids = self._live_worker_ids()
+            if live_ids:
+                marks = ",".join("?" * len(live_ids))
+                cursor.execute(
+                    f"SELECT task_name FROM tasks WHERE status = 'running' "
+                    f"AND (worker_id IS NULL OR worker_id IN ({marks}))",
+                    list(live_ids))
+            else:
+                cursor.execute("SELECT task_name FROM tasks WHERE status = 'running'")
             blocked = tasks_mod.blocked_task_names([r[0] for r in cursor.fetchall()])
 
             query = ("SELECT id FROM tasks WHERE status = 'pending' "
@@ -64,12 +75,27 @@ class TaskWorker:
         finally:
             connection.close()
 
+    def _live_worker_ids(self):
+        """Ids of workers this process knows are alive; empty means 'no pool
+        knowledge' (standalone worker), where every running row counts."""
+        import app as app_mod
+        pool = getattr(app_mod, 'pool', None)
+        if pool is None:
+            return set()
+        try:
+            return pool.live_worker_ids()
+        except Exception:
+            return set()
+
     def execute_task(self, task_id):
         from tasks import get_registered_task, on_task_completed
         from db import db, Task
         import tasks as tasks_mod
 
         task = db.session.get(Task, task_id)
+        if task is None:
+            # Cancelled between claim and read: nothing to run, nothing to fail.
+            return
         task_func = get_registered_task(task.task_name)
         input_data = json.loads(task.input_json) if task.input_json else {}
         display_name = tasks_mod.task_display_name(task.task_name, input_data)
@@ -82,6 +108,9 @@ class TaskWorker:
             # Re-read task — function may have set waiting_for_children
             db.session.expire(task)
             task = db.session.get(Task, task_id)
+            if task is None:
+                # Cancelled mid-run and deleted: drop the result quietly.
+                return
 
             if task.status == 'waiting_for_children':
                 # Children created before the park may already all be done, and their own
@@ -96,16 +125,20 @@ class TaskWorker:
             task.completed_at = datetime.datetime.utcnow()
             parent_id = task.parent_id
             db.session.commit()
-            on_task_completed(task_id, parent_id)
-            # Delete completed non-parent tasks (parent+children are cleaned up in _try_complete_parent)
-            if not parent_id:
-                db.session.delete(task)
-                db.session.commit()
         except Exception as e:
             tasks_mod._current_task_id = None
             logger.error(f"Task '{display_name}' ({task_id}) failed: {e}")
             db.session.rollback()
             task = db.session.get(Task, task_id)
+            if task is None:
+                return  # cancelled mid-run: the row is already gone
+            if task.status in ('completed', 'waiting_for_children'):
+                # The work itself finished; only the post-success bookkeeping
+                # (parent completion, continuation) raised. Failing the row now
+                # would also run its cleanup hook and undo real output - log and
+                # leave the success in place.
+                logger.error(f"Post-success bookkeeping for task {task_id} failed: {e}")
+                return
             task.status = 'failed'
             task.error_message = str(e)
             task.exit_code = 1
@@ -114,16 +147,35 @@ class TaskWorker:
             db.session.commit()
             tasks_mod._run_cleanup_hook(task_name, input_json)
             on_task_completed(task_id, parent_id)
+            return
+        # Parent-completion and the delete happen outside the try: a raising
+        # continuation must not flip the committed success into a failure.
+        try:
+            on_task_completed(task_id, parent_id)
+        except Exception as e:
+            logger.error(f"Completing parent of task {task_id} failed: {e}")
+        if not parent_id:
+            try:
+                db.session.delete(task)
+                db.session.commit()
+            except Exception as e:
+                logger.error(f"Deleting completed task {task_id} failed: {e}")
 
     def run(self):
         with self.app.app_context():
             logger.info(f"Worker started, polling every {self.poll_interval}s")
             while not self.stop_event.is_set():
-                task_id = self.claim_task()
-                if task_id is not None:
-                    self.execute_task(task_id)
-                else:
-                    self.stop_event.wait(self.poll_interval)
+                try:
+                    task_id = self.claim_task()
+                    if task_id is not None:
+                        self.execute_task(task_id)
+                    else:
+                        self.stop_event.wait(self.poll_interval)
+                except Exception as e:
+                    # A bookkeeping bug must never take the worker process down:
+                    # a dead worker leaves a ghost 'running' row and (worse) an
+                    # unreplaced process. Log and keep polling.
+                    logger.error(f"Worker loop error (continuing): {e}")
             logger.info("Worker stopped")
 
 

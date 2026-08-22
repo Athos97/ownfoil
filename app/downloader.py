@@ -365,23 +365,57 @@ def _resolve_ghost_entry(provider, session, target, settings):
     return max(exact or candidates, key=lambda e: e.version)
 
 
-def _make_progress_cb(row_id):
-    """Throttled DB updates of the download row's progress percentage."""
+# How many progress callbacks may pass without the liveness re-check of the
+# driving task row (each callback is one chunk-block, so ~4MB of transfer).
+CANCEL_CHECK_EVERY = 16
+
+
+class TransferCancelled(ghostshop.GhostshopError):
+    """The task driving this transfer was cancelled - abort the transfer."""
+
+
+def _make_progress_cb(row_id, task_id=None):
+    """Throttled DB updates of the download row's progress percentage.
+
+    With a task_id, also watches for cooperative cancellation: a cancelled task
+    row disappears from the table, and noticing that aborts the transfer mid-
+    stream instead of letting it run to completion orphaned."""
     last = [0.0]
+    ticks = [0]
 
     def cb(done, total):
         now = time.monotonic()
         if total and done < total and (now - last[0]) < PROGRESS_WRITE_INTERVAL:
+            ticks[0] += 1
+            if task_id is not None and ticks[0] % CANCEL_CHECK_EVERY == 0:
+                _raise_if_task_cancelled(task_id)
             return
         last[0] = now
+        ticks[0] += 1
+        if task_id is not None and ticks[0] % CANCEL_CHECK_EVERY == 0:
+            _raise_if_task_cancelled(task_id)
         pct = int(done * 100 / total) if total else 0
         update_download(row_id, progress=pct)
 
     return cb
 
 
-def download_target_ghosteshop(target, settings, existing_row=None):
-    """Download one target straight from Ghost eShop into its game folder."""
+def _raise_if_task_cancelled(task_id):
+    """Cheap liveness probe: the cancel path deletes the row outright."""
+    from sqlalchemy import text as _text
+    from db import db as _db
+    row = _db.session.execute(
+        _text("SELECT 1 FROM tasks WHERE id = :id AND status IN ('pending', 'running')"),
+        {"id": task_id}).first()
+    if row is None:
+        raise TransferCancelled('cancelled by user')
+
+
+def download_target_ghosteshop(target, settings, existing_row=None, task_id=None):
+    """Download one target straight from Ghost eShop into its game folder.
+
+    With a task_id, the transfer aborts cooperatively when that task row is
+    cancelled (deleted) mid-stream."""
     ghost = _ghost_settings(settings)
 
     common = dict(
@@ -397,7 +431,7 @@ def download_target_ghosteshop(target, settings, existing_row=None):
         row = existing_row or get_download_by_app(
             target.get('app_id'), str(target.get('app_version')))
         if row:
-            update_download(row.id, status='completed', error=None, progress=100)
+            update_download(row.id, status='completed', error=CLEAR_ERROR, progress=100)
         return True
 
     try:
@@ -420,7 +454,7 @@ def download_target_ghosteshop(target, settings, existing_row=None):
     # add_download returns an existing row untouched, so (re)apply the live fields.
     update_download(row.id, torrent_name=entry.name, indexer='Ghost eShop',
                     size=entry.size, seeders=None, status='downloading',
-                    error=None, progress=0)
+                    error=CLEAR_ERROR, progress=0)
 
     destination = _ghost_destination(entry, target, settings)
     if not destination:
@@ -436,11 +470,18 @@ def download_target_ghosteshop(target, settings, existing_row=None):
         ghostshop.net.download_chunked(
             session, info, destination, expected_size=entry.size,
             headers=provider.chunk_headers(link),
-            on_progress=_make_progress_cb(row.id))
+            on_progress=_make_progress_cb(row.id, task_id=task_id))
         provider.download_complete(session, link)
         update_download(row.id, progress=100)
         logger.info(f"[ghosteshop] Downloaded {entry.name}")
         return True
+    except TransferCancelled:
+        # Cooperative abort: the cleanup hook owns putting the row back to
+        # queued, keeping the .part for a cheap resume.
+        logger.info(f"[ghosteshop] Transfer of {entry.name} cancelled.")
+        update_download(row.id, status='queued', progress=0,
+                        error='Cancelled - will resume on the next pass')
+        return False
     except ghostshop.GhostshopError as e:
         update_download(row.id, status='failed', error=str(e))
         logger.error(f"[ghosteshop] download failed for {entry.name}: {e}")
@@ -490,7 +531,7 @@ def sync_downloads_status(settings):
 
     for d in in_progress:
         if is_app_owned(d.app_id, d.app_version):
-            update_download(d.id, status='completed', error=None, progress=100)
+            update_download(d.id, status='completed', error=CLEAR_ERROR, progress=100)
             continue
         if d.source == SOURCE_GHOSTESHOP:
             # Progress comes from the job itself; completion arrives via ownership.
@@ -550,9 +591,48 @@ def _requeue_orphan_ghosteshop_rows():
     """), {'source': SOURCE_GHOSTESHOP,
            'task_name': GHOSTESHOP_DOWNLOAD_TASK}).all()
     for (row_id,) in rows:
-        update_download(row_id, status='queued', error=None, progress=0)
+        update_download(row_id, status='queued', error=CLEAR_ERROR, progress=0)
         logger.info(f'[ghosteshop] Requeued orphaned download row {row_id} '
                     '(no live task for it).')
+
+
+def _gc_orphan_part_files():
+    """Delete .part/.part.state files whose download row is gone or completed:
+    the resume machinery leaves them behind when a target is deleted, fails
+    permanently, or completes by other means."""
+    from pathlib import Path as _Path
+    roots = {os.path.dirname(p) or '/' for p in _ghost_library_roots()}
+    live_keys = set()
+    for d in get_all_downloads():
+        if d.source == SOURCE_GHOSTESHOP and d.status in ('queued', 'downloading'):
+            live_keys.add(d.torrent_name or '')
+    removed = 0
+    for root in roots:
+        try:
+            candidates = list(_Path(root).rglob('*.part'))[:500]
+        except OSError:
+            continue
+        for part in candidates:
+            stem = part.name[:-len('.part')]
+            if stem in live_keys:
+                continue
+            # Only Ghost eShop residue: its names are catalog file names.
+            row = Download.query.filter_by(torrent_name=stem).first()
+            if row is None or row.status in ('completed', 'failed'):
+                try:
+                    part.unlink(missing_ok=True)
+                    part.with_name(part.name + '.state').unlink(missing_ok=True)
+                    removed += 1
+                except OSError as e:
+                    logger.debug(f'[ghosteshop] Could not remove stale {part}: {e}')
+    if removed:
+        logger.info(f'[ghosteshop] Removed {removed} orphaned .part file(s).')
+
+
+def _ghost_library_roots():
+    settings = get_settings()
+    path = _ghost_library_path(settings)
+    return [path] if path else get_library_paths()
 
 
 def prepare_ghosteshop_targets(settings=None):
@@ -569,6 +649,12 @@ def prepare_ghosteshop_targets(settings=None):
 
     sync_downloads_status(settings)
     _requeue_orphan_ghosteshop_rows()
+    _gc_orphan_part_files()
+    try:
+        from db import purge_stale_events
+        purge_stale_events()
+    except Exception as e:
+        logger.debug(f'Stale event purge skipped: {e}')
 
     targets = []
     # Explicit queued rows first (Add Content) - bases included.
@@ -611,7 +697,7 @@ def prepare_ghosteshop_targets(settings=None):
 
 
 def download_ghosteshop_row(app_id, app_version, name=None, title_id=None,
-                            app_type=None, settings=None):
+                            app_type=None, settings=None, task_id=None):
     """Download one target via Ghost eShop - the body of the per-file io task.
 
     The downloads row drives the flow: a foreign-lane row is a no-op, an owned
@@ -636,10 +722,11 @@ def download_ghosteshop_row(app_id, app_version, name=None, title_id=None,
                            name=name or app_id, source=SOURCE_GHOSTESHOP,
                            status='downloading', progress=0)
     if is_app_owned(app_id, app_version):
-        update_download(row.id, status='completed', error=None, progress=100)
+        update_download(row.id, status='completed', error=CLEAR_ERROR, progress=100)
         return True
     target = rebuild_target_from_download(row)
-    return download_target_ghosteshop(target, settings, existing_row=row)
+    return download_target_ghosteshop(target, settings, existing_row=row,
+                                      task_id=task_id)
 
 
 # ---------------------------------------------------------------- torrents pass
@@ -692,16 +779,25 @@ def run_downloader_job(settings=None, progress=None):
 
 
 def retry_download(download_id, settings):
+    """Re-run a failed download from scratch through its own source.
+
+    Ghost eShop rows go back to queued and download as their own io task (the
+    transfer must not run inside the caller's request thread); torrents rows
+    are re-searched and handed to qBittorrent right away, as before."""
     d = get_download_by_id(download_id)
     if not d:
         return False, 'Download not found'
     if is_app_owned(d.app_id, d.app_version):
-        update_download(d.id, status='completed', error=None, progress=100)
+        update_download(d.id, status='completed', error=CLEAR_ERROR, progress=100)
         return True, 'Already owned'
-    target = rebuild_target_from_download(d)
     if (d.source or SOURCE_TORRENTS) == SOURCE_GHOSTESHOP:
-        ok = download_target_ghosteshop(target, settings)
-        return ok, ('Re-downloaded' if ok else 'Ghost eShop download failed')
+        update_download(d.id, status='queued', progress=0, error=CLEAR_ERROR)
+        import tasks as tasks_mod
+        tasks_mod.enqueue_task(GHOSTESHOP_DOWNLOAD_TASK, {
+            'app_id': d.app_id, 'app_version': str(d.app_version),
+            'name': d.name, 'title_id': d.title_id, 'app_type': d.app_type})
+        return True, 'Requeued'
+    target = rebuild_target_from_download(d)
     delete_download(download_id)
     ok = download_target_torrents(target, settings)
     return ok, ('Re-searched' if ok else 'No match found')

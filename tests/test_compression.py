@@ -413,25 +413,31 @@ def test_compression_cleanup_removes_partial_and_mark(env):
     assert _ignored(target, "")                       # our own delete of the partial, for the watcher
 
 
-def test_cleanup_clears_pending_and_fails_running(env):
-    """The whole pending queue is cleared on startup (regenerable; must not preempt the fresh
-    startup pipeline), while interrupted running/waiting tasks are failed."""
-    def task(name, status):
-        t = Task(task_name=name, status=status, input_hash="x")
+def test_cleanup_clears_scheduled_and_fails_running(env):
+    """Startup clears the scheduled queue (each chain re-arms itself) while
+    manual pending rows - an 'Update now' nobody will re-issue - survive, and
+    interrupted running/waiting tasks are failed."""
+    import datetime
+
+    def task(name, status, run_after=None):
+        t = Task(task_name=name, status=status, input_hash="x", run_after=run_after)
         db.session.add(t)
         return t
 
-    task("compress_file", "pending")
-    task("process_library", "pending")    # library-level leftover that would re-spawn per-file work
-    task("identify_file", "pending")
+    task("compress_file", "pending",
+         run_after=datetime.datetime(2030, 1, 1))        # scheduled leftover
+    task("process_library", "pending",
+         run_after=datetime.datetime(2030, 1, 1))        # scheduled leftover
+    manual = task("downloader_ghosteshop_run", "pending")  # manual: run_after NULL
     running = task("compress_file", "running")
     waiting = task("process_library", "waiting_for_children")
     db.session.commit()
-    running_id, waiting_id = running.id, waiting.id
+    manual_id, running_id, waiting_id = manual.id, running.id, waiting.id
 
     tasks.cleanup_tasks()
 
-    assert Task.query.filter_by(status="pending").count() == 0     # entire queue cleared
+    assert Task.query.filter_by(status="pending").count() == 1     # only the manual row
+    assert db.session.get(Task, manual_id) is not None             # user intent kept
     assert db.session.get(Task, running_id).status == "failed"     # interrupted run failed
     assert db.session.get(Task, waiting_id).status == "failed"
 

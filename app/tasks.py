@@ -299,12 +299,22 @@ def _try_complete_parent(parent_id):
         continuation = TASK_CONTINUATIONS.get(task_name)
         if continuation:
             input_data = json.loads(row[2])
-            continuation(**input_data)
+            try:
+                continuation(**input_data)
+            except Exception as e:
+                # The children all finished - the pass happened. A raising
+                # continuation (e.g. a sync against a down qBittorrent) must not
+                # leave the parent row behind forever or break the delete below.
+                logger.error(f"Continuation of {task_name} (task {parent_id}) failed: {e}")
 
         # Delete parent and its children
-        Task.query.filter_by(parent_id=parent_id).delete()
-        Task.query.filter_by(id=parent_id).delete()
-        db.session.commit()
+        try:
+            Task.query.filter_by(parent_id=parent_id).delete()
+            Task.query.filter_by(id=parent_id).delete()
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Deleting completed parent {parent_id} failed: {e}")
 
         # Propagate completion up the chain
         if grandparent_id:
@@ -319,56 +329,62 @@ def _try_complete_parent(parent_id):
 # --- Cancellation ---
 
 def _cancel_atomic(task_id, removable=('pending', 'running', 'waiting_for_children')):
-    """Delete the task and any pending descendants under one transaction.
-    Running descendants are orphaned (parent_id=NULL) so they finish naturally
-    and self-delete on completion. Waiting descendants are recursed into.
+    """Delete the task and its descendants under one transaction.
+
+    Descendants: pending and terminal rows are deleted, running rows are
+    orphaned (parent_id=NULL) so they finish naturally and self-delete. Walking
+    descendants for every removable status - not just waiting_for_children -
+    keeps a parent that failed after enqueueing from leaving children behind,
+    which would otherwise break the delete (FK) or accumulate completed orphans.
 
     `removable` is which statuses may be taken out, so cancelling (live work) and
     dismissing (a failed row) share one transaction and one set of descendant rules.
     """
-    connection = db.engine.raw_connection()
-    try:
-        cursor = connection.cursor()
-        cursor.execute("BEGIN IMMEDIATE")
-        cursor.execute(
-            "SELECT status, task_name, input_json, parent_id, worker_id FROM tasks WHERE id = ?",
-            (task_id,)
-        )
-        row = cursor.fetchone()
-        if not row:
-            connection.commit()
-            return False, None, None, None, None
-        status, task_name, input_json, parent_id, worker_id = row
-        if status not in removable:
-            connection.commit()
-            return False, None, None, None, None
+    def _txn():
+        connection = db.engine.raw_connection()
+        try:
+            cursor = connection.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute(
+                "SELECT status, task_name, input_json, parent_id, worker_id FROM tasks WHERE id = ?",
+                (task_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                connection.commit()
+                return False, None, None, None, None
+            status, task_name, input_json, parent_id, worker_id = row
+            if status not in removable:
+                connection.commit()
+                return False, None, None, None, None
 
-        running_worker_id = worker_id if status == 'running' else None
-        cancelled_task_name = task_name if status == 'running' else None
-        cancelled_input_json = input_json if status == 'running' else None
+            running_worker_id = worker_id if status == 'running' else None
+            cancelled_task_name = task_name if status == 'running' else None
+            cancelled_input_json = input_json if status == 'running' else None
 
-        def _walk(pid):
-            cursor.execute("SELECT id, status FROM tasks WHERE parent_id = ?", (pid,))
-            for child_id, child_status in cursor.fetchall():
-                if child_status == 'pending':
-                    cursor.execute("DELETE FROM tasks WHERE id = ?", (child_id,))
-                elif child_status == 'running':
-                    cursor.execute("UPDATE tasks SET parent_id = NULL WHERE id = ?", (child_id,))
-                elif child_status == 'waiting_for_children':
-                    _walk(child_id)
-                    cursor.execute("DELETE FROM tasks WHERE id = ?", (child_id,))
+            def _walk(pid):
+                cursor.execute("SELECT id, status FROM tasks WHERE parent_id = ?", (pid,))
+                for child_id, child_status in cursor.fetchall():
+                    if child_status == 'pending':
+                        cursor.execute("DELETE FROM tasks WHERE id = ?", (child_id,))
+                    elif child_status == 'running':
+                        cursor.execute("UPDATE tasks SET parent_id = NULL WHERE id = ?", (child_id,))
+                    else:
+                        # waiting_for_children recurses; completed/failed leaves go.
+                        _walk(child_id)
+                        cursor.execute("DELETE FROM tasks WHERE id = ?", (child_id,))
 
-        if status == 'waiting_for_children':
             _walk(task_id)
+            cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+            connection.commit()
+            return True, parent_id, running_worker_id, cancelled_task_name, cancelled_input_json
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
-        cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-        connection.commit()
-        return True, parent_id, running_worker_id, cancelled_task_name, cancelled_input_json
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+    return with_lock_retry(_txn)
 
 
 def cancel_task(task_id):
@@ -459,12 +475,18 @@ def reap_worker_task(worker_id):
 # --- Startup cleanup ---
 
 def cleanup_tasks():
-    """Startup cleanup: clear the pending queue and fail interrupted tasks."""
+    """Startup cleanup: clear the scheduled queue and fail interrupted tasks.
+
+    Manually enqueued tasks (run_after NULL - an 'Update now', a queued Add
+    Content pass) survive the restart: nobody re-issues them, so dropping them
+    would silently lose user intent. Scheduled rows come back on their own via
+    the startup re-arm of each chain."""
     # Remove completed tasks
     Task.query.filter_by(status='completed').delete()
 
-    # Clear the entire pending queue
-    Task.query.filter_by(status='pending').delete()
+    # Clear scheduled rows only; manual pending rows run on the new pool
+    Task.query.filter(Task.status == 'pending',
+                      Task.run_after.isnot(None)).delete()
 
     # Mark running/waiting tasks as failed — they can't survive a restart
     stale = Task.query.filter(Task.status.in_(['running', 'waiting_for_children'])).all()
@@ -480,8 +502,41 @@ def cleanup_tasks():
     # Sweep leftover output from any (de)compression interrupted by the restart.
     purge_temp_files()
 
+    # Drop watcher-event and temp-claim leftovers older than their TTL.
+    from db import purge_stale_events
+    purge_stale_events()
+
+    # Ghost rows left mid-transfer go back to queued so the surviving manual
+    # passes (or the re-armed schedule) pick them up with a cheap resume.
+    from db import Download
+    flipped = Download.query.filter_by(source='ghosteshop', status='downloading').update(
+        {'status': 'queued', 'progress': 0})
+    if flipped:
+        db.session.commit()
+        logger.info(f"Requeued {flipped} interrupted Ghost eShop download(s).")
+
 
 # --- Helpers ---
+
+def with_lock_retry(fn, attempts=3, base_delay=0.3):
+    """Run a BEGIN IMMEDIATE helper again on 'database is locked'.
+
+    The web process calls enqueue/cancel paths from request threads; with
+    workers and pollers active, a busy_timeout miss surfaces as an HTTP 500.
+    A short retry closes the gap - the writer holding the lock finishes in
+    milliseconds, not tens of seconds."""
+    import time as _time
+    last = None
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as e:
+            if 'locked' not in str(e).lower() or attempt == attempts - 1:
+                raise
+            last = e
+            _time.sleep(base_delay * (attempt + 1))
+    raise last
+
 
 def compute_input_hash(input_data):
     canonical = json.dumps(input_data, sort_keys=True, separators=(',', ':'))
@@ -503,85 +558,88 @@ def enqueue_task(task_name, input_data=None, run_after=None):
     else:
         dedup_statuses = "('pending', 'running', 'waiting_for_children')"
 
-    connection = db.engine.raw_connection()
-    try:
-        cursor = connection.cursor()
-        cursor.execute("BEGIN IMMEDIATE")
+    def _txn():
+        connection = db.engine.raw_connection()
+        try:
+            cursor = connection.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
 
-        cursor.execute(
-            f"SELECT id FROM tasks WHERE task_name = ? AND input_hash = ? AND status IN {dedup_statuses}",
-            (task_name, input_hash)
-        )
-        existing = cursor.fetchone()
+            cursor.execute(
+                f"SELECT id FROM tasks WHERE task_name = ? AND input_hash = ? AND status IN {dedup_statuses}",
+                (task_name, input_hash)
+            )
+            existing = cursor.fetchone()
 
-        if existing:
+            if existing:
+                connection.commit()
+                task = db.session.get(Task, existing[0])
+                return task, False
+
+            now = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+            run_after_str = run_after.strftime('%Y-%m-%d %H:%M:%S') if run_after else None
+            cursor.execute(
+                "INSERT INTO tasks (task_name, status, completion_pct, input_json, input_hash, run_after, created_at) "
+                "VALUES (?, 'pending', 0, ?, ?, ?, ?)",
+                (task_name, input_json, input_hash, run_after_str, now)
+            )
+            new_id = cursor.lastrowid
             connection.commit()
-            task = db.session.get(Task, existing[0])
-            return task, False
 
-        now = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-        run_after_str = run_after.strftime('%Y-%m-%d %H:%M:%S') if run_after else None
-        cursor.execute(
-            "INSERT INTO tasks (task_name, status, completion_pct, input_json, input_hash, run_after, created_at) "
-            "VALUES (?, 'pending', 0, ?, ?, ?, ?)",
-            (task_name, input_json, input_hash, run_after_str, now)
-        )
-        new_id = cursor.lastrowid
-        connection.commit()
+            if run_after:
+                local_run_after = run_after + (datetime.datetime.now() - datetime.datetime.utcnow())
+                schedule_info = f", run_after={local_run_after.strftime('%Y-%m-%d %H:%M:%S')}"
+            else:
+                schedule_info = ""
+            logger.debug(f"Enqueued task '{task_display_name(task_name, input_data)}' "
+                         f"(id={new_id}{schedule_info})")
+            task = db.session.get(Task, new_id)
+            return task, True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
-        if run_after:
-            local_run_after = run_after + (datetime.datetime.now() - datetime.datetime.utcnow())
-            schedule_info = f", run_after={local_run_after.strftime('%Y-%m-%d %H:%M:%S')}"
-        else:
-            schedule_info = ""
-        logger.debug(f"Enqueued task '{task_display_name(task_name, input_data)}' "
-                     f"(id={new_id}{schedule_info})")
-        task = db.session.get(Task, new_id)
-        return task, True
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+    return with_lock_retry(_txn)
 
 
 def update_scheduled_task(task_name, run_after):
     """Update run_after on a pending scheduled task, delete if None, or create if missing."""
-    connection = db.engine.raw_connection()
-    try:
-        cursor = connection.cursor()
-        cursor.execute("BEGIN IMMEDIATE")
-        if run_after is None:
-            cursor.execute(
-                "DELETE FROM tasks WHERE task_name = ? AND status = 'pending' AND run_after IS NOT NULL",
-                (task_name,)
-            )
-            logger.debug(f"Deleted scheduled task '{task_name}' (disabled)")
-        else:
-            cursor.execute(
-                "UPDATE tasks SET run_after = ? WHERE task_name = ? AND status = 'pending' AND run_after IS NOT NULL",
-                (run_after.strftime('%Y-%m-%d %H:%M:%S'), task_name)
-            )
-            if cursor.rowcount == 0:
-                # No existing scheduled task — create one
-                now = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-                input_hash = compute_input_hash({})
+    def _txn():
+        connection = db.engine.raw_connection()
+        try:
+            cursor = connection.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+            if run_after is None:
                 cursor.execute(
-                    "INSERT INTO tasks (task_name, status, completion_pct, input_json, input_hash, run_after, created_at) "
-                    "VALUES (?, 'pending', 0, '{}', ?, ?, ?)",
-                    (task_name, input_hash, run_after.strftime('%Y-%m-%d %H:%M:%S'), now)
+                    "DELETE FROM tasks WHERE task_name = ? AND status = 'pending' AND run_after IS NOT NULL",
+                    (task_name,)
                 )
-                local_ra = run_after + (datetime.datetime.now() - datetime.datetime.utcnow())
-                logger.debug(f"Created scheduled task '{task_name}' run_after={local_ra.strftime('%Y-%m-%d %H:%M:%S')}")
+                logger.debug(f"Deleted scheduled task '{task_name}' (disabled)")
             else:
-                local_ra = run_after + (datetime.datetime.now() - datetime.datetime.utcnow())
-                # logger.debug(f"Updated scheduled task '{task_name}' run_after={local_ra.strftime('%Y-%m-%d %H:%M:%S')}")
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+                cursor.execute(
+                    "UPDATE tasks SET run_after = ? WHERE task_name = ? AND status = 'pending' AND run_after IS NOT NULL",
+                    (run_after.strftime('%Y-%m-%d %H:%M:%S'), task_name)
+                )
+                if cursor.rowcount == 0:
+                    # No existing scheduled task — create one
+                    now = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                    input_hash = compute_input_hash({})
+                    cursor.execute(
+                        "INSERT INTO tasks (task_name, status, completion_pct, input_json, input_hash, run_after, created_at) "
+                        "VALUES (?, 'pending', 0, '{}', ?, ?, ?)",
+                        (task_name, input_hash, run_after.strftime('%Y-%m-%d %H:%M:%S'), now)
+                    )
+                    local_ra = run_after + (datetime.datetime.now() - datetime.datetime.utcnow())
+                    logger.debug(f"Created scheduled task '{task_name}' run_after={local_ra.strftime('%Y-%m-%d %H:%M:%S')}")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    return with_lock_retry(_txn)
 
 
 def get_task(task_id):
@@ -696,6 +754,31 @@ def _downloader_ghosteshop_done(**kwargs):
     downloader_lib.sync_downloads_status(settings)
     logger.info('Ghost eShop pass done.')
     arm_downloader_schedule(settings)
+    _arm_ghosteshop_retry(settings)
+
+
+# A failed transfer (network blip longer than the chunk retries) should not
+# wait a full schedule interval (a day by default) for its second chance.
+GHOSTESHOP_RETRY_DELAYS = (datetime.timedelta(minutes=15),
+                           datetime.timedelta(hours=1),
+                           datetime.timedelta(hours=6))
+
+
+def _arm_ghosteshop_retry(settings):
+    """Schedule an early retry pass while failed ghost rows remain, with a
+    growing delay, so a temporarily-down portal gets re-tried without spinning.
+
+    The scheduled row's dedup is (task_name, input_hash) over pending rows, and
+    update_scheduled_task moves any existing scheduled row's run_after - so this
+    never stacks passes, it just pulls the next one closer."""
+    from db import Download
+    failed = Download.query.filter_by(source='ghosteshop', status='failed').count()
+    if not failed:
+        return
+    delay = GHOSTESHOP_RETRY_DELAYS[min(failed, len(GHOSTESHOP_RETRY_DELAYS)) - 1]
+    update_scheduled_task('downloader_ghosteshop_run',
+                          datetime.datetime.utcnow() + delay)
+    logger.info(f'Ghost eShop: {failed} failed row(s), retry pass armed in {delay}.')
 
 
 @register_task(downloader_lib.GHOSTESHOP_DOWNLOAD_TASK, group='io')
@@ -707,7 +790,31 @@ def ghosteshop_download_task(app_id, app_version, name=None, **kwargs):
     (visible on the Downloads page) rather than raising - a missing catalog
     entry is an expected outcome, not a task crash."""
     settings = get_settings()
-    downloader_lib.download_ghosteshop_row(app_id, str(app_version), settings=settings)
+    downloader_lib.download_ghosteshop_row(app_id, str(app_version),
+                                           settings=settings,
+                                           task_id=_current_task_id)
+
+
+@register_cleanup(downloader_lib.GHOSTESHOP_DOWNLOAD_TASK)
+def _ghosteshop_download_cleanup(app_id, app_version, name=None, **kwargs):
+    """A cancelled/killed transfer puts its row back to queued instead of leaving
+    it 'downloading' forever - the orphan healing only runs at the next pass,
+    which can be a day out. The .part file stays: resuming is cheap."""
+    from db import get_download_by_app, update_download
+    row = get_download_by_app(app_id, str(app_version))
+    if row is None or row.status not in ('downloading', 'queued'):
+        return
+    update_download(row.id, status='queued', progress=0,
+                    error='Cancelled - will resume on the next pass')
+
+
+@register_cleanup('downloader_ghosteshop_run')
+@register_cleanup('downloader_torrents_run')
+def _downloader_pass_cleanup(**kwargs):
+    """A cancelled/killed pass must re-arm its schedule row, or the source stays
+    dead until the next application restart - the re-arm otherwise only happens
+    when the pass completes, fails its prepare step, or the app starts."""
+    arm_downloader_schedule(get_settings())
 
 
 # --- Scan pipeline ---

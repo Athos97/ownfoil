@@ -288,11 +288,16 @@ class Task(db.Model):
 
 
 class IgnoredEvent(db.Model):
-    """File events the watcher should ignore (written by worker before move/delete)."""
+    """File events the watcher should ignore (written by worker before move/delete).
+
+    `created_at` drives a TTL: an event whose FS callback never arrives (watcher
+    disabled at the time, skipped poll) must not swallow a future real delete of
+    the same path forever."""
     __tablename__ = 'ignored_events'
     id = db.Column(db.Integer, primary_key=True)
     src_path = db.Column(db.String, nullable=False)
     dest_path = db.Column(db.String, nullable=False, default='')
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
 
 def add_ignored_event(src_path, dest_path=''):
@@ -316,10 +321,14 @@ def pop_ignored_event(src_path=None, dest_path=None):
 
 
 class TempFile(db.Model):
-    """A path a background task is actively writing that is not a library file yet."""
+    """A path a background task is actively writing that is not a library file yet.
+
+    `created_at` allows stale claims to expire instead of blocking scan/organize
+    for that path until a restart."""
     __tablename__ = 'temp_files'
     id = db.Column(db.Integer, primary_key=True)
     filepath = db.Column(db.String, unique=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
 
 class Download(db.Model):
@@ -442,6 +451,36 @@ def purge_temp_files():
                 pop_ignored_event(src_path=entry.filepath, dest_path='')
         db.session.delete(entry)
     db.session.commit()
+
+
+# How long an entry may sit unconsumed before it is assumed lost. Ignored
+# events expect a watcher callback within seconds; temp claims belong to tasks
+# that finish in minutes. A generous hour covers both without ever swallowing
+# a live one.
+EVENT_TTL = datetime.timedelta(hours=1)
+
+
+def purge_stale_events():
+    """Drop ignored events whose callback never came, and temp claims whose task
+    died without releasing them. Without this, one missed watcher event eats the
+    next real delete of the same path, and a leaked temp claim blocks that path
+    from scan/organize until a restart."""
+    cutoff = datetime.datetime.utcnow() - EVENT_TTL
+    stale_ignored = IgnoredEvent.query.filter(IgnoredEvent.created_at < cutoff)
+    stale_temp = TempFile.query.filter(TempFile.created_at < cutoff)
+    # Keep claims on paths a committed file still uses - not stale, just old.
+    stale_temp = [t for t in stale_temp.all()
+                  if Files.query.filter_by(filepath=t.filepath).first() is None]
+    removed_ignored = stale_ignored.delete(synchronize_session=False)
+    for t in stale_temp:
+        db.session.delete(t)
+    # Always commit: the bulk DELETE opened a write transaction even when it
+    # matched nothing, and an uncommitted one holds the WAL write lock - every
+    # later BEGIN IMMEDIATE (claims, enqueues) would block on busy_timeout.
+    db.session.commit()
+    if removed_ignored or stale_temp:
+        logger.info(f'Purged {removed_ignored} stale ignored event(s) and '
+                    f'{len(stale_temp)} stale temp claim(s).')
 
 
 def init_db(app):
@@ -785,6 +824,11 @@ def reset_files_organized():
 
 # --- Downloads ---
 
+# Sentinel for update_download(error=...): explicitly clear the column, which a
+# plain None (meaning "field not provided") cannot express.
+CLEAR_ERROR = object()
+
+
 def is_app_owned(app_id, app_version):
     """Whether the library holds this (app_id, app_version) — how a download completes."""
     app = get_app_by_id_and_version(app_id, str(app_version))
@@ -834,10 +878,15 @@ def add_download(**kwargs):
     return download
 
 def update_download(download_id, **kwargs):
+    """Update download-row fields. None values are skipped (callers omit optional
+    fields they don't know); pass CLEAR_ERROR as the value of `error` to null it,
+    since a plain None cannot be distinguished from 'not provided'."""
     download = get_download_by_id(download_id)
     if not download:
         return
     for key, value in kwargs.items():
+        if value is CLEAR_ERROR:
+            value = None
         if value is not None:
             setattr(download, key, value)
     db.session.commit()

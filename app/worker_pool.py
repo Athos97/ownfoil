@@ -5,16 +5,28 @@ from multiprocessing import Process, Event as MPEvent
 
 logger = logging.getLogger('main')
 
+# How often the watchdog checks that every worker process is still alive.
+WATCHDOG_INTERVAL = 30.0
+
 
 class WorkerPool:
-    """Manages a dynamic pool of task worker subprocesses."""
+    """Manages a dynamic pool of task worker subprocesses.
+
+    A watchdog thread replaces any worker process that died without notice
+    (OOM, segfault, kill -9): without it, a dead worker leaves a 'running'
+    task row forever and - worse for the io group of one - blocks every
+    remaining worker from claiming group tasks while the pool looks healthy."""
 
     def __init__(self, app, initial_count=1):
         self.app = app  # for app-context when reaping a stopped worker's running task
         self.workers = {}  # worker_id -> (Process, MPEvent)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._next_id = 1
+        self._watchdog_stop = threading.Event()
         self._scale_to(initial_count)
+        self._watchdog = threading.Thread(target=self._watchdog_loop,
+                                          name='worker-watchdog', daemon=True)
+        self._watchdog.start()
 
     def _start_worker(self, worker_id=None):
         """Start a single worker process. Reuses worker_id if given, else allocates a new one."""
@@ -61,6 +73,24 @@ class WorkerPool:
             self._start_worker(worker_id=worker_id)
             return True
 
+    def _watchdog_loop(self):
+        """Replace workers whose process died unexpectedly, reusing the id.
+
+        _stop_worker already reaps the dead worker's 'running' task (failing it
+        and running its cleanup hook), so a replacement is all that is left."""
+        while not self._watchdog_stop.wait(WATCHDOG_INTERVAL):
+            try:
+                with self._lock:
+                    for worker_id, (proc, _event) in list(self.workers.items()):
+                        if not proc.is_alive():
+                            logger.warning(
+                                f'Worker-{worker_id} (pid={proc.pid}) died '
+                                f'unexpectedly (exitcode={proc.exitcode}); restarting.')
+                            self._stop_worker(worker_id, force=True)
+                            self._start_worker(worker_id=worker_id)
+            except Exception as e:
+                logger.error(f'Worker watchdog error: {e}')
+
     def _scale_to(self, desired_count):
         """Scale the pool to the desired number of workers."""
         current = len(self.workers)
@@ -81,8 +111,15 @@ class WorkerPool:
     def shutdown(self):
         """Stop all workers."""
         with self._lock:
+            self._watchdog_stop.set()
             for wid in list(self.workers.keys()):
                 self._stop_worker(wid)
+
+    def live_worker_ids(self):
+        """Ids whose process is still alive — callers deciding whether a 'running'
+        task row still has an owner consult this, not the table alone."""
+        with self._lock:
+            return {wid for wid, (proc, _e) in self.workers.items() if proc.is_alive()}
 
     @property
     def count(self):
