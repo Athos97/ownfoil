@@ -262,6 +262,36 @@
 
     // --- Rendering ---
 
+    // A running process_file is two jobs in one trench coat; the file row's own
+    // flags say which one it is on right now. Null when it is not a live
+    // process_file or the flags are unknown (no file row).
+    function escHtml(s) {
+        return String(s ?? '').replace(/[&<>"']/g,
+            c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+    }
+
+    const STAGE_META = {
+        identify: {label: 'Identifying', title: 'Reading the file\'s own metadata (CNMT) with the console keys'},
+        organize: {label: 'Renaming', title: 'Moving/renaming the file to the organizer templates'},
+    };
+
+    function processStage(task) {
+        if (task.taskName !== 'process_file' || task.status !== 'running'
+                || task.fileIdentified == null) {
+            return null;
+        }
+        if (!task.fileIdentified) return 'identify';
+        if (!task.fileOrganized) return 'organize';
+        return null;  // both done: about to delegate to verify or finish
+    }
+
+    function stageBadge(task) {
+        const key = processStage(task);
+        if (!key) return '';
+        const meta = STAGE_META[key];
+        return ` <span class="badge text-bg-light text-dark align-middle" title="${meta.title}">${meta.label}</span>`;
+    }
+
     // A task that finishes moves above the live rows and holds there until it fades out.
     // The finished group runs oldest-finished first, so each new one lands at its end,
     // right above the running rows. Live rows keep their oldest-first order below: they
@@ -320,7 +350,19 @@
             icon.innerHTML = ICONS[iconKey];
         }
 
-        own('.task-head > .task-name').textContent = task.displayName;
+        const nameCell = own('.task-head > .task-name');
+        nameCell.textContent = task.displayName;
+        // Stage badge (and per-kind help) as title text on the name: appended
+        // nodes would be wiped by the textContent above, so this runs after.
+        const stage = stageBadge(task);
+        if (stage) {
+            nameCell.innerHTML = `${escHtml(task.displayName)}${stage}`;
+        }
+        if (task.taskName === 'verify_file' && !nameCell.title) {
+            nameCell.title = 'Verifies integrity: full-content hash check against the CNMT';
+        } else if (task.taskName === 'compress_file' && !nameCell.title) {
+            nameCell.title = 'Converts NSP/XCI to compressed NSZ/XCZ';
+        }
         own('.task-head > .task-meta').textContent = taskMeta(task);
 
         // Only a live row carries a bar: a queued one has nothing to report yet, and a
@@ -376,12 +418,14 @@
     function renderTiles() {
         const live = Object.values(tasks).filter(t => !t.done);
         const queued = live.filter(t => t.status === 'pending' && !t.runAfter).length;
-        const running = live.filter(t => t.status === 'running' || t.status === 'waiting_for_children').length;
+        // Strictly worker-occupied rows: a parked parent (waiting_for_children)
+        // holds no worker, and summing it made "Running" exceed the worker count.
+        const running = live.filter(t => t.status === 'running').length;
         const scheduled = live.filter(t => t.status === 'pending' && t.runAfter).length;
         const failed = live.filter(t => t.status === 'failed').length;
         const tiles = [
             ['Queued', queued, 'waiting for a worker'],
-            ['Running', running, 'in flight right now'],
+            ['Running', running, `of ${Object.keys(workers).length || '—'} workers busy`],
             ['Scheduled', scheduled, 'future periodic runs'],
             ['Failed', failed, failed ? 'need attention' : 'all good'],
         ];
@@ -544,7 +588,7 @@
                 </div>`;
             const slot = col.querySelector('.worker-task');
             if (task) {
-                slot.innerHTML = `<div class="fw-semibold">${task.displayName}</div>
+                slot.innerHTML = `<div class="fw-semibold">${escHtml(task.displayName)}${stageBadge(task)}</div>
                     <div class="text-secondary small">${taskMeta(task)}</div>`;
             } else {
                 slot.innerHTML = '<span class="text-secondary fst-italic">Idle</span>';

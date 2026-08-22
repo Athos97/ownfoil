@@ -19,14 +19,23 @@ logger = logging.getLogger('main')
 # never keep a child while dropping its parent.
 MAX_TASKS = 200
 
-# The file tasks label themselves with a filename rather than a row id, so the path is
+# File tasks label themselves with a filename rather than a row id, so the path is
 # joined in here. Resolving it per task instead would mean a query per file task on every
 # tick, several times a second.
+#
+# Completed rows are excluded outright: they are either about to be deleted (roots,
+# and children of a finished parent) or retained only as a parked parent's progress
+# bookkeeping until the whole pass ends - and a single big pass floods the window with
+# the latter, starving the running work and the pending queue out of the feed. Their
+# exclusion reaches the client as an ordinary `remove` event, whose fade-out handling
+# already gives completed work its green tick.
 _TASK_SQL = """
 SELECT t.id, t.parent_id, t.task_name, t.status, t.completion_pct, t.input_json,
-       t.error_message, t.created_at, t.started_at, t.run_after, t.worker_id, f.filepath
+       t.error_message, t.created_at, t.started_at, t.run_after, t.worker_id,
+       f.filepath, f.identified, f.organized
 FROM tasks t
 LEFT JOIN files f ON f.id = json_extract(t.input_json, '$.file_id')
+WHERE t.status != 'completed'
 ORDER BY t.id
 LIMIT ?
 """
@@ -58,7 +67,8 @@ def _read_tasks():
 
     tasks = {}
     for (task_id, parent_id, task_name, status, pct, input_json,
-         error_message, created_at, started_at, run_after, worker_id, filepath) in rows:
+         error_message, created_at, started_at, run_after, worker_id, filepath,
+         identified, organized) in rows:
         try:
             input_data = json.loads(input_json) if input_json else {}
         except ValueError:
@@ -78,6 +88,12 @@ def _read_tasks():
             'startedAt': _utc(started_at),
             'runAfter': _utc(run_after),
             'workerId': worker_id,
+            # File-task bookkeeping, so the client can tell WHICH stage a running
+            # process_file is in. Null when the join found no file row (deleted, or
+            # a task kind that carries no file_id); coerced because SQLite hands
+            # back 0/1 rather than booleans.
+            'fileIdentified': None if identified is None else bool(identified),
+            'fileOrganized': None if organized is None else bool(organized),
         }
     return tasks
 

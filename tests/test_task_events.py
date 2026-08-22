@@ -319,3 +319,88 @@ def test_workers_are_empty_without_a_pool(queue, monkeypatch):
     import app as app_mod
     monkeypatch.setattr(app_mod, "pool", None)
     assert task_events.workers_snapshot() == []
+
+
+# --- Completed children of a live parent stay out of the feed ---
+
+def test_completed_child_of_parked_parent_leaves_the_feed(queue):
+    """A completed child kept for its parent's progress is bookkeeping, not news: it
+    must not consume the feed window. Its exclusion reaches the client as an ordinary
+    remove, so the fade-out machinery still runs."""
+    parent = add_task(task_name="process_library", status="waiting_for_children")
+    child = add_task(task_name="process_file", status="running", parent_id=parent.id)
+
+    task_events.tasks_poll()  # both arrive
+
+    child.status = "completed"
+    db.session.commit()
+    events = task_events.tasks_poll()
+
+    assert by_type(events) == {"remove": [child.id]}
+    assert child.id not in task_events._tasks_state
+    assert parent.id in task_events._tasks_state, "the parked parent stays"
+
+
+def test_completed_root_task_leaves_as_remove(queue):
+    """A completed top-level task leaves the feed as a plain remove: the worker
+    deletes the row moments later anyway, and keeping completed rows (roots or
+    not) in the window is exactly what starved it. The client's markDone gives
+    the row its green fade on the remove event itself."""
+    task = add_task(task_name="verify_file", status="running")
+    task_events.tasks_poll()
+
+    task.status = "completed"
+    db.session.commit()
+    assert by_type(task_events.tasks_poll()) == {"remove": [task.id]}
+
+
+def test_window_starvation_leaves_running_work_visible(queue):
+    """The live bug: a pass with hundreds of retained completed children pushed the
+    running rows past MAX_TASKS, and the page showed idle workers. The exclusion
+    keeps the window for what runs and what is next."""
+    parent = add_task(task_name="process_library", status="waiting_for_children")
+    for _ in range(task_events.MAX_TASKS + 10):
+        add_task(task_name="process_file", status="completed", parent_id=parent.id)
+    running = add_task(task_name="process_file", status="running",
+                       worker_id=1, parent_id=parent.id)
+
+    snapshot = task_events.tasks_snapshot()
+
+    assert running.id in {t["id"] for t in snapshot}
+    assert all(t["status"] != "completed" for t in snapshot)
+
+
+# --- File-stage flags ---
+
+def test_running_process_file_carries_its_stage_flags(queue):
+    """The file row's identified/organized flags ride along, so the client can tell
+    identifying from renaming on a live process_file."""
+    from db import Files, Libraries
+    lib = Libraries(path="/games")
+    db.session.add(lib)
+    db.session.flush()
+    f = Files(filepath="/games/x.nsp", filename="x.nsp", library_id=lib.id,
+              folder="/games", extension="nsp", size=10, identified=False,
+              organized=False)
+    db.session.add(f)
+    db.session.commit()
+
+    task = add_task(task_name="process_file", status="running",
+                    input_json=f'{{"file_id": {f.id}}}')
+    row = task_events.tasks_snapshot()[0]
+    assert row["fileIdentified"] is False and row["fileOrganized"] is False
+
+    task_events.tasks_poll()  # baseline: the snapshot above did not build one
+
+    f.identified = True
+    db.session.commit()
+    events = task_events.tasks_poll()
+    updated = next(d for t, d in events if t == "update" and d["id"] == task.id)
+    assert updated["fileIdentified"] is True and updated["fileOrganized"] is False
+
+
+def test_non_file_task_has_null_flags(queue):
+    add_task(task_name="update_titledb", status="running",
+             input_json="{}")
+    row = task_events.tasks_snapshot()[0]
+    assert row["fileIdentified"] is None and row["fileOrganized"] is None
