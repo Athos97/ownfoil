@@ -68,16 +68,20 @@ TARGET = {
 
 def test_destination_lands_in_the_game_folder(library, monkeypatch):
     from pathlib import Path
+    from utils import sanitize_filename
+    title_name = 'The Legend of Zelda: Breath of the Wild'
     monkeypatch.setattr(downloader_lib, 'get_library_paths', lambda: ['/games'])
     monkeypatch.setattr(downloader_lib.titles_lib, 'get_game_info',
-                        lambda tid: {'name': 'The Legend of Zelda: Breath of the Wild'})
+                        lambda tid: {'name': title_name})
     entry = CatalogEntry(name=ZELDA_UPD_NAME, tid=ZELDA_UPD_TID, category='UPDATE',
                          version=1114112, size=ZELDA_UPD_SIZE)
     dest = downloader_lib._ghost_destination(
         entry, TARGET, {'downloader': {'ghosteshop': {}},
                         'library': {'management': {'organizer': {}}}})
     parts = Path(dest).parts
-    assert parts[-2] == 'The Legend of Zelda: Breath of the Wild'
+    # The folder carries the sanitized name: on win32 the ':' becomes a
+    # full-width '：', so assert against the sanitizer, not the raw title.
+    assert parts[-2] == sanitize_filename(title_name, False), parts
     assert parts[-1] == ZELDA_UPD_NAME
     assert parts[0] == os.sep or Path(dest).is_absolute()
 
@@ -297,17 +301,20 @@ def test_destination_falls_back_to_row_name_for_unknown_titles(library, monkeypa
     the queue row's display name (the game title for Add Content picks) names
     the destination folder instead."""
     from pathlib import Path
+    from utils import sanitize_filename
+    game_name = 'Galactic Wars: Defend Your Star Worlds'
     monkeypatch.setattr(downloader_lib, 'get_library_paths', lambda: ['/games'])
     monkeypatch.setattr(downloader_lib.titles_lib, 'get_game_info',
                         lambda tid: {'name': 'Unrecognized'})
     entry = CatalogEntry(name='Galactic Wars [010000201E22E000][v0]',
                          tid='010000201E22E000', category='BASE', version=0, size=1)
-    target = {'title_id': '010000201E22E000', 'name': 'Galactic Wars: Defend Your Star Worlds'}
+    target = {'title_id': '010000201E22E000', 'name': game_name}
     dest = downloader_lib._ghost_destination(
         entry, target, {'downloader': {'ghosteshop': {}},
                         'library': {'management': {'organizer': {}}}})
     parts = Path(dest).parts
-    assert parts[-2] == 'Galactic Wars: Defend Your Star Worlds', parts
+    # Sanitized form: ':' survives on unix, becomes full-width on win32.
+    assert parts[-2] == sanitize_filename(game_name, False), parts
 
 
 def test_row_tracks_the_version_actually_fetched(library, portal, tmp_path, monkeypatch):

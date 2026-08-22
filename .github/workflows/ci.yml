@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '*.*.*'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Python 3.14, the version the Docker image ships: what CI green-lights
+      # is exactly what deploys.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.14'
+          enable-cache: true
+          cache-dependency-glob: requirements.txt
+
+      - name: Create virtualenv
+        run: uv venv
+
+      - name: Install dependencies
+        run: uv pip install --requirement requirements.txt pytest
+
+      - name: Run tests
+        run: uv run pytest tests -v
+        timeout-minutes: 20
+
+      # The package is not published anywhere, but it must keep building.
+      - name: Validate Python package build
+        run: uv build
+
+  docker:
+    name: Docker image
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish only from the deployment branch and release tags; everything
+      # else (feature branches, PRs) builds both platforms as a smoke check
+      # without touching the registry.
+      - name: Decide whether to publish
+        id: publish
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* || "$GITHUB_REF" == refs/heads/v3 ]]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/athos97/ownfoil
+          flavor: |
+            latest=auto
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/v3' }}
+
+      - name: Build (and push) image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.publish.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
