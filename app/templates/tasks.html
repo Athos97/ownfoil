@@ -50,20 +50,22 @@
     <p id="failedEmpty" class="text-secondary fst-italic">No failures.</p>
 
     <h4 class="mt-4 mb-3">History <span class="text-secondary fw-normal small">(last 100)</span></h4>
-    <div id="historyTable" class="table-responsive">
-        <table class="table table-sm table-hover align-middle">
-            <thead>
-                <tr>
-                    <th scope="col"></th>
-                    <th scope="col">Task</th>
-                    <th scope="col">Duration</th>
-                    <th scope="col">Finished</th>
-                </tr>
-            </thead>
-            <tbody id="historyBody"></tbody>
-        </table>
+    <div class="task-scroll task-scroll-history">
+        <div id="historyTable" class="table-responsive">
+            <table class="table table-sm table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th scope="col"></th>
+                        <th scope="col">Task</th>
+                        <th scope="col">Duration</th>
+                        <th scope="col">Finished</th>
+                    </tr>
+                </thead>
+                <tbody id="historyBody"></tbody>
+            </table>
+        </div>
+        <p id="historyEmpty" class="text-secondary fst-italic">Nothing ran yet.</p>
     </div>
-    <p id="historyEmpty" class="text-secondary fst-italic">Nothing ran yet.</p>
 
     <hr class="hr-settings">
     <h2 class="pb-2">Workers</h2>

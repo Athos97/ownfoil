@@ -231,6 +231,19 @@ p.game-description {
     padding-right: .75rem;
 }
 
+/* History rows are one line each: more of them fit before the section becomes
+   its own viewport, and the sticky header keeps labelling while scrolling. */
+.task-scroll-history {
+    max-height: 22rem;
+}
+
+.task-scroll-history thead th {
+    position: sticky;
+    top: 0;
+    background-color: var(--bs-body-bg);
+    z-index: 1;
+}
+
 .task-row.task-fading {
     opacity: 0;
 }
