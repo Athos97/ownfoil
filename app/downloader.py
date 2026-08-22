@@ -450,7 +450,36 @@ def download_target_ghosteshop(target, settings, existing_row=None, task_id=None
                     f"v{target.get('app_version')}")
         return False
 
+    # titledb can know a newer version than the catalog carries (its data comes
+    # from a different upstream), so the entry fetched may not be the version
+    # asked for. Completion is ownership-based: the row must track the bytes
+    # actually fetched, or it can never flip to completed.
+    requested_ver = str(target.get('app_version') or 0)
+    entry_ver = str(entry.version or 0)
+    if entry_ver not in (requested_ver, '0'):
+        if is_app_owned(target.get('app_id'), entry_ver):
+            # The catalog's best is already in the library: nothing to fetch -
+            # complete the requested row instead of re-downloading every pass.
+            row = add_download(**common, status='downloading', progress=0)
+            update_download(row.id, torrent_name=entry.name, indexer='Ghost eShop',
+                            size=entry.size, status='completed', progress=100,
+                            error=f'Catalog best is v{entry.version}; already owned')
+            logger.info(f"[ghosteshop] {target.get('app_id')}: catalog best "
+                        f"v{entry.version} already owned - nothing to do.")
+            return True
+        logger.info(f"[ghosteshop] {target.get('app_id')}: requested v{requested_ver} "
+                    f"not in catalog, fetching best available v{entry.version}.")
+
     row = add_download(**common, status='downloading', progress=0)
+    if entry_ver not in (requested_ver, '0'):
+        # Re-point the row at the version being fetched; one row per target.
+        existing = get_download_by_app(target.get('app_id'), entry_ver)
+        if existing is not None and existing.id != row.id:
+            update_download(existing.id, status='downloading', progress=0)
+            delete_download(row.id)
+            row = existing
+        else:
+            update_download(row.id, app_version=entry_ver)
     # add_download returns an existing row untouched, so (re)apply the live fields.
     update_download(row.id, torrent_name=entry.name, indexer='Ghost eShop',
                     size=entry.size, seeders=None, status='downloading',
@@ -717,6 +746,13 @@ def download_ghosteshop_row(app_id, app_version, name=None, title_id=None,
             base = app_id[:-3]
             title_id = (base + '000' if app_type != APP_TYPE_DLC else
                         f'{int(base, 16) - 1:013X}000')
+        if not name:
+            # Prefer titledb's name over the raw app id for the row's display.
+            info = titles_lib.get_game_info(
+                app_id if app_type == APP_TYPE_DLC else title_id) or {}
+            titledb_name = info.get('name')
+            if titledb_name and titledb_name != 'Unrecognized':
+                name = titledb_name
         row = add_download(title_id=title_id, app_id=app_id,
                            app_version=str(app_version), app_type=app_type,
                            name=name or app_id, source=SOURCE_GHOSTESHOP,

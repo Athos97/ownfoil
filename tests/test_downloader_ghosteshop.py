@@ -308,3 +308,51 @@ def test_destination_falls_back_to_row_name_for_unknown_titles(library, monkeypa
                         'library': {'management': {'organizer': {}}}})
     parts = Path(dest).parts
     assert parts[-2] == 'Galactic Wars: Defend Your Star Worlds', parts
+
+
+def test_row_tracks_the_version_actually_fetched(library, portal, tmp_path, monkeypatch):
+    """titledb may know a newer update than the catalog carries: the fetch falls
+    back to the catalog's best, and the row must follow it - completion is
+    ownership-based and would never match the requested-but-unavailable version
+    (the live 'stuck at 100%' incident)."""
+    monkeypatch.setattr(downloader_lib.titles_lib, 'get_game_info',
+                        lambda tid: {'name': 'Zelda BOTW'})
+    settings = settings_with(str(tmp_path), ghost_settings(portal))
+    target = {'title_id': ZELDA_TID, 'app_id': ZELDA_UPD_TID,
+              'app_version': '9999999', 'app_type': 'UPDATE',
+              'name': 'Zelda BOTW', 'patch_level': 152}
+
+    ok = downloader_lib.download_target_ghosteshop(target, settings)
+
+    assert ok
+    row = Download.query.filter_by(app_id=ZELDA_UPD_TID).one()
+    assert row.app_version == '1114112', "row re-pointed to the fetched version"
+    assert row.progress == 100
+    assert (tmp_path / 'Zelda BOTW' / ZELDA_UPD_NAME).is_file()
+
+
+def test_catalog_best_already_owned_completes_without_downloading(
+        library, portal, tmp_path, monkeypatch):
+    """When the catalog's best is already in the library (under another version),
+    the target completes with a note instead of re-downloading it every pass."""
+    from db import Titles as TitlesRow, Apps as AppsRow
+    monkeypatch.setattr(downloader_lib.titles_lib, 'get_game_info',
+                        lambda tid: {'name': 'Zelda BOTW'})
+    settings = settings_with(str(tmp_path), ghost_settings(portal))
+    title = TitlesRow(title_id=ZELDA_TID, have_base=True)
+    db.session.add(title); db.session.flush()
+    db.session.add(AppsRow(title_id=title.id, app_id=ZELDA_UPD_TID,
+                           app_version='1114112', app_type='UPDATE', owned=True))
+    db.session.commit()
+
+    target = {'title_id': ZELDA_TID, 'app_id': ZELDA_UPD_TID,
+              'app_version': '9999999', 'app_type': 'UPDATE',
+              'name': 'Zelda BOTW', 'patch_level': 152}
+    ok = downloader_lib.download_target_ghosteshop(target, settings)
+
+    assert ok
+    row = Download.query.filter_by(app_id=ZELDA_UPD_TID).one()
+    assert row.status == 'completed'
+    assert 'already owned' in row.error
+    assert list(tmp_path.rglob('*.nsz')) == [], "nothing re-downloaded"
+    assert list(tmp_path.rglob('*.part')) == []
