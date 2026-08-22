@@ -139,9 +139,9 @@
         el.innerHTML = row(`
             <div class="flex-grow-1">
                 <div>${statusBadge(base.owned, 'Owned', 'Missing')}</div>
-                <div class="text-secondary small mt-1">${fileSummary(base)}</div>
+                <div class="text-secondary small text-break mt-1" style="max-width: 22rem;">${fileSummary(base)}</div>
             </div>
-            <div class="text-secondary small text-end font-monospace">${esc(base.appId)}</div>`);
+            <div class="text-secondary small text-end font-monospace ms-auto ps-2">${esc(base.appId)}</div>`);
     }
 
     function renderUpdates(t) {
@@ -155,14 +155,15 @@
         const highest = updates[0].appVersion;
         el.innerHTML = updates.map(u => row(`
             <div class="flex-grow-1">
-                <span class="fw-semibold">v${patchLevel(u.appVersion)}</span>
-                <span class="text-secondary small ms-2">${esc(u.releaseDate || '')}</span>
-                ${u.appVersion === highest ? '<span class="badge text-bg-info ms-2">latest</span>' : ''}
-                ${u.blacklisted ? '<span class="badge text-bg-dark ms-2" title="Blacklisted"><i class="bi bi-slash-circle"></i> blacklisted</span>' : ''}
+                <div class="d-flex align-items-center flex-wrap gap-1">
+                    <span class="fw-semibold me-1">v${patchLevel(u.appVersion)}</span>
+                    <span class="text-secondary small me-1">${esc(u.releaseDate || '')}</span>
+                    ${u.appVersion === highest ? '<span class="badge text-bg-info">latest</span>' : ''}
+                    ${u.blacklisted ? '<span class="badge text-bg-dark" title="Blacklisted"><i class="bi bi-slash-circle"></i> blacklisted</span>' : ''}
+                </div>
+                <div class="text-secondary small text-break mt-1" style="max-width: 22rem;">${u.owned ? fileSummary(u) : ''}</div>
             </div>
-            <div>${statusBadge(u.owned, 'Owned', 'Missing')}
-                <span class="text-secondary small ms-2">${u.owned ? fileSummary(u) : ''}</span>
-            </div>`)).join('');
+            <div class="ms-auto ps-2">${statusBadge(u.owned, 'Owned', 'Missing')}</div>`)).join('');
     }
 
     function renderDlcs(t) {
