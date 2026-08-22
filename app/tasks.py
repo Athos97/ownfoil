@@ -294,6 +294,22 @@ def _try_complete_parent(parent_id):
         )
         connection.commit()
 
+        # The parent's terminal outcome is history too; its children recorded
+        # their own rows as they finished.
+        try:
+            from db import record_task_history
+            cursor.execute(
+                "SELECT task_name, input_json, started_at FROM tasks WHERE id = ?",
+                (parent_id,))
+            prow = cursor.fetchone()
+            if prow:
+                display = task_display_name(prow[0],
+                                            json.loads(prow[1]) if prow[1] else {})
+                record_task_history(parent_id, prow[0], display, 'completed',
+                                    started_at=prow[2])
+        except Exception as hist_e:
+            logger.warning(f"Parent history write for {parent_id} failed: {hist_e}")
+
         # Run continuation outside the transaction
         task_name = row[1]
         continuation = TASK_CONTINUATIONS.get(task_name)
@@ -399,6 +415,17 @@ def cancel_task(task_id):
     if not found:
         return False
 
+    from db import record_task_history
+    if task_name is not None:
+        # A running cancellation: record it as such before the row vanishes.
+        try:
+            input_data = json.loads(input_json) if input_json else {}
+            record_task_history(task_id, task_name,
+                                task_display_name(task_name, input_data),
+                                'cancelled')
+        except ValueError:
+            record_task_history(task_id, task_name, task_name, 'cancelled')
+
     if worker_id is not None:
         import app as app_mod
         if app_mod.pool is not None:
@@ -461,11 +488,16 @@ def reap_worker_task(worker_id):
     if task is None:
         return
     task_name, input_json, parent_id = task.task_name, task.input_json, task.parent_id
+    display = task_display_name(task_name, json.loads(input_json) if input_json else {})
+    started = task.started_at
     task.status = 'failed'
     task.error_message = 'Interrupted by worker stop'
     task.exit_code = 1
     task.completed_at = datetime.datetime.utcnow()
     db.session.commit()
+    from db import record_task_history
+    record_task_history(task.id, task_name, display, 'failed',
+                        error='Interrupted by worker stop', started_at=started)
     logger.info(f"Reaped task {task.id} ({task_name}) from stopped worker {worker_id}")
     _run_cleanup_hook(task_name, input_json)
     if parent_id:
@@ -490,12 +522,18 @@ def cleanup_tasks():
 
     # Mark running/waiting tasks as failed — they can't survive a restart
     stale = Task.query.filter(Task.status.in_(['running', 'waiting_for_children'])).all()
+    from db import record_task_history
     for task in stale:
         task.status = 'failed'
         task.error_message = 'Interrupted by application restart'
         task.exit_code = 1
         task.completed_at = datetime.datetime.utcnow()
         logger.info(f"Reset stale task {task.id} ({task.task_name})")
+        record_task_history(task.id, task.task_name,
+                            task_display_name(task.task_name,
+                                              json.loads(task.input_json) if task.input_json else {}),
+                            'failed', error='Interrupted by application restart',
+                            started_at=task.started_at)
 
     db.session.commit()
 

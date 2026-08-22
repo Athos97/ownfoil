@@ -1467,3 +1467,28 @@ def resolve_activity(kind: Optional[ActivityKind], limit: int,
             detail=r.detail,
         ))
     return out
+
+
+def resolve_task_history(limit: int, ctx: GraphQLContext, info) -> List:
+    """Terminal task outcomes, newest first. Admin only."""
+    if not ctx.can_admin:
+        return []
+    from .types import TaskHistoryEntry
+    limit = max(1, min(limit, 200))
+    rows = db.session.execute(text("""
+        SELECT id, task_name, display_name, status, error, started_at,
+               completed_at, duration_ms
+        FROM task_history
+        ORDER BY id DESC
+        LIMIT :limit
+    """), {"limit": limit}).all()
+    return [TaskHistoryEntry(
+        id=strawberry.ID(str(r.id)),
+        task_name=r.task_name or "",
+        display_name=r.display_name,
+        status=r.status or "",
+        error=r.error,
+        started_at=_iso(r.started_at),
+        completed_at=_iso(r.completed_at),
+        duration_ms=r.duration_ms,
+    ) for r in rows]

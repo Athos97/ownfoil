@@ -371,6 +371,59 @@ class Download(db.Model):
 # A small shop does not generate more, and SQLite stays fast at this size.
 ACTIVITY_MAX_EVENTS = 1000
 
+# Same idea for the task history: enough to answer "what ran overnight",
+# small enough that the page renders instantly.
+TASK_HISTORY_MAX = 100
+
+
+class TaskHistory(db.Model):
+    """One terminal task outcome, kept after the live task row is deleted.
+
+    Completed tasks are removed from `tasks` on purpose (the live page shows
+    work in flight), which also erased any trace of what ran. This table is
+    that trace: written at the terminal transitions, pruned to the newest
+    TASK_HISTORY_MAX rows."""
+    __tablename__ = 'task_history'
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.Integer)          # the live row's id, for reference
+    task_name = db.Column(db.String)
+    display_name = db.Column(db.String)
+    status = db.Column(db.String)            # completed | failed | cancelled
+    error = db.Column(db.String)
+    started_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    duration_ms = db.Column(db.Integer)
+
+
+def record_task_history(task_id, task_name, display_name, status, error=None,
+                        started_at=None, completed_at=None):
+    """Insert one history row and prune to the retention cap.
+
+    Best-effort by design: called from terminal paths where a history failure
+    must never disturb the accounting it records."""
+    try:
+        completed = completed_at or datetime.datetime.utcnow()
+        duration_ms = None
+        if started_at:
+            try:
+                duration_ms = int((completed - started_at).total_seconds() * 1000)
+            except TypeError:
+                duration_ms = None
+        db.session.add(TaskHistory(
+            task_id=task_id, task_name=task_name, display_name=display_name,
+            status=status, error=error, started_at=started_at,
+            completed_at=completed, duration_ms=duration_ms))
+        db.session.commit()
+        cutoff = db.session.query(TaskHistory.id).order_by(
+            TaskHistory.id.desc()).offset(TASK_HISTORY_MAX - 1).first()
+        if cutoff:
+            TaskHistory.query.filter(TaskHistory.id < cutoff[0]).delete()
+            db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logging.getLogger('main').warning(f'Task history write failed: {e}')
+
 
 class ActivityEvent(db.Model):
     """One user-visible action: a shop client connecting, a file download, or a web

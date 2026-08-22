@@ -125,6 +125,9 @@ class TaskWorker:
             task.completed_at = datetime.datetime.utcnow()
             parent_id = task.parent_id
             db.session.commit()
+            from db import record_task_history
+            record_task_history(task_id, task.task_name, display_name,
+                                'completed', started_at=task.started_at)
         except Exception as e:
             tasks_mod._current_task_id = None
             logger.error(f"Task '{display_name}' ({task_id}) failed: {e}")
@@ -144,7 +147,11 @@ class TaskWorker:
             task.exit_code = 1
             task.completed_at = datetime.datetime.utcnow()
             task_name, input_json, parent_id = task.task_name, task.input_json, task.parent_id
+            started = task.started_at
             db.session.commit()
+            from db import record_task_history
+            record_task_history(task_id, task_name, display_name, 'failed',
+                                error=str(e), started_at=started)
             tasks_mod._run_cleanup_hook(task_name, input_json)
             on_task_completed(task_id, parent_id)
             return

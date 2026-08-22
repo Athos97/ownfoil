@@ -14,14 +14,15 @@ from .resolvers import (
     resolve_downloads, resolve_downloader_status,
     resolve_file, resolve_files, resolve_ghostshop_game, resolve_ghostshop_search,
     resolve_jackett_search, resolve_libraries, resolve_missing_targets,
-    resolve_stats, resolve_task, resolve_tasks, resolve_title,
+    resolve_stats, resolve_task, resolve_task_history, resolve_tasks, resolve_title,
     resolve_titles, resolve_workers,
 )
 from .types import (
     App, AppConnection, BlacklistedApp, Download, DownloadSource, DownloadStatus,
     File, FileConnection, GhostshopGame, GhostshopSearchResult,
     JackettSearchResult, Library, LibraryStats, MissingTarget, SourceStatus,
-    Task, TaskStatus, Title, TitleConnection, ActivityEvent, ActivityKind, Worker,
+    Task, TaskHistoryEntry, TaskStatus, Title, TitleConnection, ActivityEvent,
+    ActivityKind, Worker,
 )
 
 
@@ -223,6 +224,16 @@ class Query:
         any other role. Each row is one (app id, version) update/DLC target the
         downloader picked a torrent for."""
         return resolve_downloads(status=status, limit=limit, ctx=info.context, info=info)
+
+    @described_field
+    def task_history(
+        self, info: Info,
+        limit: Annotated[int, _arg("Maximum rows to return, clamped to 1-200.")] = 100,
+    ) -> List[TaskHistoryEntry]:
+        """Terminal outcomes of finished tasks (completed/failed/cancelled), newest
+        first - the live `tasks` query only shows work that still exists. Admin
+        only; empty for any other role."""
+        return resolve_task_history(limit, ctx=info.context, info=info)
 
     @described_field
     def stats(self, info: Info) -> LibraryStats:

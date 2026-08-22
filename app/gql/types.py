@@ -388,6 +388,24 @@ class ActivityEvent:
 
 
 @described(strawberry.type)
+class TaskHistoryEntry:
+    """One terminal task outcome, kept after the live row was deleted. Admin only."""
+    id: strawberry.ID = desc("Primary key of the history row.")
+    task_name: str = desc("The registered task name that ran.")
+    display_name: Optional[str] = desc("The human-readable label shown while it ran.",
+                                       default=None)
+    status: str = desc("`completed`, `failed` or `cancelled`.")
+    error: Optional[str] = desc("Why it failed, when it did. Null otherwise.",
+                                default=None)
+    started_at: Optional[str] = desc("When the live row was claimed, ISO 8601.",
+                                     default=None)
+    completed_at: Optional[str] = desc("When it reached its terminal state, ISO 8601.",
+                                       default=None)
+    duration_ms: Optional[int] = desc("Wall-clock runtime in milliseconds, when both "
+                                      "timestamps are known.", default=None)
+
+
+@described(strawberry.type)
 class UnidentifiedFile:
     """One file ownfoil could not identify, with the reason it last failed - the
     detail behind the stats `unidentifiedFiles` count. Admin only."""
