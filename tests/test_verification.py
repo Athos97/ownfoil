@@ -233,14 +233,48 @@ def test_nstools_chatter_is_silenced():
     ("hash", {"signature_valid": True}, True),             # deeper level not yet attempted
     ("hash", {"hash_valid": False, "hash_modified": False}, False),
     ("hash", {"hash_valid": True}, False),
-    # A failure with no hash_modified came from a phase that raised - an unreadable file
-    # rather than a verdict - so it is re-checked. A pass has nothing left to learn.
-    ("hash", {"hash_valid": False}, True),
+    # A failure with no hash_modified came from a phase that raised - an unreadable
+    # file rather than a verdict. It stays unretried all the same: the failure is
+    # deterministic (a corrupt container fails identically every time), and retrying
+    # it forever was the process_file <-> verify_file enqueue loop.
+    ("hash", {"hash_valid": False}, False),
 ])
 def test_needs_verify_tracks_the_configured_depth(env, depth, columns, expected):
     f = env.seed(**columns)
     mgmt = _settings(verify=True, depth=depth)["library"]["management"]
     assert tasks._needs_verify(f, mgmt) is expected
+
+
+def test_deterministic_verification_failure_does_not_loop(env):
+    """The live incident: a file whose verification errors deterministically (an
+    unopenable container) drove process_file -> verify_file -> process_file ... ten
+    thousand times. The verify stage must run exactly once for such a file."""
+    enqueued = []
+    env.monkeypatch.setattr(tasks, "get_settings",
+                            lambda: _settings(verify=True, depth="hash"))
+    env.monkeypatch.setattr(tasks, "enqueue_task",
+                            lambda name, data=None, **k: enqueued.append((name, data)))
+    env.monkeypatch.setattr(tasks.verification_lib, "verify",
+                            lambda fp, depth, progress=None:
+                            (False, False, None, "Not a valid HFS0 partition"))
+    f = env.seed()
+    fid = f.id
+
+    # First drive: process_file delegates to verify_file, which re-drives it.
+    tasks.process_file_task(file_id=fid)
+    assert enqueued == [("verify_file", {"file_id": fid})]
+    tasks.verify_file_task(file_id=fid)
+    assert enqueued == [("verify_file", {"file_id": fid}),
+                        ("process_file", {"file_id": fid})]
+
+    # Second drive: the stored verdict must satisfy the stage - no more work.
+    tasks.process_file_task(file_id=fid)
+    assert len(enqueued) == 2, "verify_file must not be enqueued again"
+
+    f = db.session.get(Files, fid)
+    assert f.hash_valid is False and f.hash_modified is None
+    assert f.verification_error == "Not a valid HFS0 partition"
+    assert tasks._needs_verify(f, _settings(verify=True, depth="hash")["library"]["management"]) is False
 
 
 def test_needs_verify_is_off_without_keys(env):

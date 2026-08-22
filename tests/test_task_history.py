@@ -153,3 +153,27 @@ def test_old_admin_routes_redirect(env):
     assert resp.status_code == 302 and resp.location.endswith('/admin/manage')
     resp = env.test_client().get('/admin/add-content')
     assert resp.status_code == 302 and resp.location.endswith('/admin/manage')
+
+
+def test_parent_completion_history_parses_raw_cursor_dates(env):
+    """_try_complete_parent reads started_at through a raw cursor, which hands
+    back a string; the history row must survive the round trip (the TypeError
+    dropped every parent entry - 'Startup', 'Process library files'...)."""
+    import datetime as _dt
+    parent = Task(task_name='scan_libraries', status='waiting_for_children',
+                  input_hash='h', input_json='{}',
+                  started_at=_dt.datetime(2026, 8, 22, 12, 0, 0))
+    db.session.add(parent)
+    db.session.flush()
+    child = Task(task_name='scan_library', status='completed', input_hash='hc',
+                 input_json='{"library_path": "/games"}', parent_id=parent.id)
+    db.session.add(child)
+    db.session.commit()
+    parent_id = parent.id
+
+    tasks_mod._try_complete_parent(parent_id)
+
+    rows = _history()
+    assert any(r.task_id == parent_id and r.status == 'completed'
+               and r.duration_ms is not None for r in rows), \
+        "the parent's history row carries its parsed start time"

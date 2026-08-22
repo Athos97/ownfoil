@@ -305,8 +305,17 @@ def _try_complete_parent(parent_id):
             if prow:
                 display = task_display_name(prow[0],
                                             json.loads(prow[1]) if prow[1] else {})
+                # Raw cursors hand back DateTime columns as strings; the ORM
+                # column would reject them and drop the whole history row.
+                started = prow[2]
+                if isinstance(started, str):
+                    try:
+                        started = datetime.datetime.strptime(
+                            started[:19], '%Y-%m-%d %H:%M:%S')
+                    except ValueError:
+                        started = None
                 record_task_history(parent_id, prow[0], display, 'completed',
-                                    started_at=prow[2])
+                                    started_at=started)
         except Exception as hist_e:
             logger.warning(f"Parent history write for {parent_id} failed: {hist_e}")
 
@@ -1021,8 +1030,13 @@ def _needs_verify(file, mgmt):
     if not titles_lib.Keys.keys_loaded:
         return False
     if verification['depth'] == verification_lib.DEPTH_HASH:
-        return file.hash_valid is None or (file.hash_valid is False
-                                           and file.hash_modified is None)
+        # Only "never verified" queues work. A False verdict stays - including
+        # the error-path shape (hash_valid False, hash_modified None) produced
+        # when the container cannot even be opened: that failure is
+        # deterministic, and re-running it re-enqueued process_file forever
+        # (the process_file <-> verify_file loop). A row lacking a verdict at
+        # all (both None) is pre-hash_modified legacy data: verify it once.
+        return file.hash_valid is None
     return file.signature_valid is None
 
 
