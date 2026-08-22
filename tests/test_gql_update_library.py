@@ -105,19 +105,23 @@ def test_queue_downloads_creates_one_row_per_target(library):
     assert row.source == 'ghosteshop'
     assert row.app_type == 'UPDATE'
 
-    # Queueing means downloading: a manual Ghost eShop pass starts right away,
-    # not at the next scheduled run (which can be a day out).
+    # Queueing downloads exactly the chosen entries - one per-file task, never
+    # a full pass (which would sweep every missing target unasked).
     from db import Task
-    passes = Task.query.filter_by(task_name='downloader_ghosteshop_run').all()
-    assert len(passes) == 1
-    assert json.loads(passes[0].input_json) == {'manual': True}
+    children = Task.query.filter_by(task_name='ghosteshop_download').all()
+    assert len(children) == 1
+    assert json.loads(children[0].input_json) == {
+        'app_id': '01007EF00011E800', 'app_version': '1114112',
+        'name': 'Zelda update'}
+    assert Task.query.filter_by(
+        task_name='downloader_ghosteshop_run').count() == 0
 
-    # Re-queueing the same target is a no-op, not a second row or a second pass.
+    # Re-queueing the same target is a no-op, not a second row or task.
     resp = library.test_client().post("/api/graphql", json={
         'query': QUEUE, 'variables': {'entries': [ENTRY]}})
     assert resp.get_json()['data']['queueGhosteshopDownloads'] == 0
     assert Download.query.filter_by(app_id='01007EF00011E800').count() == 1
-    assert Task.query.filter_by(task_name='downloader_ghosteshop_run').count() == 1
+    assert Task.query.filter_by(task_name='ghosteshop_download').count() == 1
 
 
 def test_queue_skips_owned_targets(library):

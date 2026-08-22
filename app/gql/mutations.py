@@ -324,10 +324,12 @@ class Mutation:
                         "type, unlike the periodic scan that only looks for missing "
                         "updates/DLCs.")],
     ) -> int:
-        """Queue catalog entries for Ghost eShop and start a pass right away.
+        """Queue catalog entries for Ghost eShop and start them right away.
 
-        Returns the number of rows now queued - entries already owned or already
-        queued are skipped, and one row per (app id, version) target is kept."""
+        Only the chosen entries download - one task per file, no library sweep;
+        missing content stays the periodic pass's (or Update Library's) job.
+        Returns the number of rows now queued - entries already owned (any
+        version) or already queued are skipped."""
         import tasks as tasks_mod
         import downloader as downloader_lib
         from db import get_download_by_app, is_app_id_owned
@@ -342,12 +344,14 @@ class Mutation:
                 title_id=e.title_id, app_id=e.app_id,
                 app_version=e.app_version, app_type=e.app_type.value,
                 name=e.name)
+            # Direct per-file task, matching the pass's child shape - never a
+            # full pass, which would also sweep every missing target the user
+            # did not ask for.
+            tasks_mod.enqueue_task(downloader_lib.GHOSTESHOP_DOWNLOAD_TASK,
+                                   {'app_id': e.app_id,
+                                    'app_version': str(e.app_version),
+                                    'name': e.name})
             queued += 1
-        if queued:
-            # Queueing means "download this": kick a manual pass now rather than
-            # waiting for the scheduled one (which can be a day out). Distinct
-            # input from the scheduled row so enqueue dedup doesn't defer it.
-            tasks_mod.enqueue_task('downloader_ghosteshop_run', {'manual': True})
         return queued
 
     @described_mutation
