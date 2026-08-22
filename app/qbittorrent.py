@@ -121,6 +121,36 @@ class QbittorrentClient:
                 return (t.get('hash') or '').lower() or None
         return None
 
+    def pause_torrent(self, info_hash):
+        """Pause one torrent. Returns (ok, error)."""
+        return self._torrent_action(info_hash, ('pause', 'stop'))
+
+    def resume_torrent(self, info_hash):
+        """Resume one paused torrent. Returns (ok, error)."""
+        return self._torrent_action(info_hash, ('resume', 'start'))
+
+    def _torrent_action(self, info_hash, endpoints):
+        """POST torrents/<endpoint>, falling back to the second name (qBittorrent 5
+        renamed pause/stop and resume/start; both exist across versions in some
+        form, and the wrong one just 404s)."""
+        if not info_hash:
+            return False, 'No torrent hash known for this download.'
+        for endpoint in endpoints:
+            try:
+                r = self.session.post(
+                    self._api(f'/api/v2/torrents/{endpoint}'),
+                    data={'hashes': info_hash},
+                    headers={'Referer': self.base_url},
+                    timeout=REQUEST_TIMEOUT,
+                )
+                if r.status_code == 200:
+                    return True, None
+                if r.status_code != 404:
+                    return False, f'qBittorrent {endpoint}: HTTP {r.status_code} {r.text.strip()[:120]}'
+            except Exception as e:
+                return False, f'qBittorrent {endpoint} error: {e}'
+        return False, f'qBittorrent rejected both {endpoints[0]} and {endpoints[1]}'
+
 
 def test_connection(qbt_settings):
     client = QbittorrentClient(qbt_settings)

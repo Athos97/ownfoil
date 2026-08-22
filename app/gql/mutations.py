@@ -44,6 +44,37 @@ def _require_admin(ctx) -> None:
         raise NotAuthorized("Admin access is required for this operation.")
 
 
+def _download_row(row) -> Download:
+    """A downloads-table row as the Download type, shared by the row-returning
+    download mutations so they all hydrate exactly like retryDownload."""
+    from .resolvers import _iso, _version_or_zero
+    try:
+        source = DownloadSource(row.source) if row.source else None
+    except ValueError:
+        source = DownloadSource.TORRENTS
+    return Download(
+        id=strawberry.ID(str(row.id)),
+        title_id=row.title_id or "",
+        app_id=row.app_id or "",
+        app_version=_version_or_zero(row.app_version),
+        app_type=AppType(row.app_type) if row.app_type in ('BASE', 'UPDATE', 'DLC')
+                 else AppType.UPDATE,
+        name=row.name,
+        search_query=row.search_query,
+        torrent_hash=row.torrent_hash,
+        torrent_name=row.torrent_name,
+        indexer=row.indexer,
+        size=row.size,
+        seeders=row.seeders,
+        source=source,
+        progress=row.progress,
+        status=DownloadStatus(row.status or 'queued'),
+        error=row.error,
+        created_at=_iso(row.created_at),
+        updated_at=_iso(row.updated_at),
+    )
+
+
 def _task_by_id(task_id, info) -> Optional[Task]:
     """Re-read a task through the query resolver so a mutation returns exactly what
     `task(id:)` would - one shape for a task, however the client got there."""
@@ -280,14 +311,58 @@ class Mutation:
         return True
 
     @described_mutation
-    def stop_downloads(self, info: Info) -> int:
-        """Stop everything and delete it: live downloader tasks are cancelled
-        (running transfers are killed), every downloads row is removed - history
-        included - and the partial .part files on disk are wiped. qBittorrent's
-        own queue is left alone. Returns the number of rows removed."""
+    def pause_download(
+        self, info: Info,
+        id: Annotated[strawberry.ID, strawberry.argument(
+            description="Primary key of the queued or downloading row to pause.")],
+    ) -> Download:
+        """Halt one unfinished download. A Ghost eShop transfer is cancelled (its
+        partial file is kept for resuming) and the row reads `paused`; a torrent
+        is paused in qBittorrent. Resuming is `resumeDownload`."""
+        import downloader as downloader_lib
+        from db import get_download_by_id
+        _require_admin(info.context)
+        ok, msg = downloader_lib.pause_download(int(id))
+        if not ok:
+            raise MutationFailed(msg)
+        row = get_download_by_id(int(id))
+        return _download_row(row) if row else None
+
+    @described_mutation
+    def resume_download(
+        self, info: Info,
+        id: Annotated[strawberry.ID, strawberry.argument(
+            description="Primary key of the paused row to resume.")],
+    ) -> Download:
+        """Resume a paused download. A Ghost eShop row is requeued and picks up
+        from its partial file when still valid (a stale token restarts the
+        transfer from scratch); a torrent resumes in qBittorrent."""
+        import downloader as downloader_lib
+        from db import get_download_by_id
+        _require_admin(info.context)
+        ok, msg = downloader_lib.resume_download(int(id))
+        if not ok:
+            raise MutationFailed(msg)
+        row = get_download_by_id(int(id))
+        return _download_row(row) if row else None
+
+    @described_mutation
+    def pause_all_downloads(self, info: Info) -> int:
+        """Pause every unfinished download - queued and transferring, both
+        sources. Rows stay (pausing is reversible; resume is one click per row);
+        nothing is deleted. Returns how many were paused."""
         import downloader as downloader_lib
         _require_admin(info.context)
-        return downloader_lib.stop_all_downloads()
+        return downloader_lib.pause_all_downloads()
+
+    @described_mutation
+    def delete_completed_downloads(self, info: Info) -> int:
+        """Remove the finished rows from the downloads log. Completed only:
+        failed rows stay retryable and visible until dismissed. Returns how
+        many went."""
+        import downloader as downloader_lib
+        _require_admin(info.context)
+        return downloader_lib.delete_completed_downloads()
 
     @described_mutation
     def run_downloader(
@@ -411,32 +486,7 @@ class Mutation:
         row = get_download_by_app(app_id, app_version)
         if row is None:
             return None
-        from .resolvers import _iso, _version_or_zero
-        try:
-            source = DownloadSource(row.source) if row.source else None
-        except ValueError:
-            source = DownloadSource.TORRENTS
-        return Download(
-            id=strawberry.ID(str(row.id)),
-            title_id=row.title_id or "",
-            app_id=row.app_id or "",
-            app_version=_version_or_zero(row.app_version),
-            app_type=AppType(row.app_type) if row.app_type in ('BASE', 'UPDATE', 'DLC')
-                     else AppType.UPDATE,
-            name=row.name,
-            search_query=row.search_query,
-            torrent_hash=row.torrent_hash,
-            torrent_name=row.torrent_name,
-            indexer=row.indexer,
-            size=row.size,
-            seeders=row.seeders,
-            source=source,
-            progress=row.progress,
-            status=DownloadStatus(row.status or 'queued'),
-            error=row.error,
-            created_at=_iso(row.created_at),
-            updated_at=_iso(row.updated_at),
-        )
+        return _download_row(row)
 
     @described_mutation
     def delete_download(

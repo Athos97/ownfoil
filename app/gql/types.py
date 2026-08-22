@@ -160,6 +160,10 @@ class DownloadStatus(Enum):
                               "known for it yet.")
     DOWNLOADING = strawberry.enum_value(
         "downloading", description="Torrent located in qBittorrent in an active state.")
+    PAUSED = strawberry.enum_value(
+        "paused", description="Halted by the user - a Ghost eShop transfer with its "
+                              "partial file kept, or a torrent paused in qBittorrent. "
+                              "Nothing touches it until `resumeDownload`.")
     COMPLETED = strawberry.enum_value(
         "completed", description="The library holds the target: the downloaded file "
                                  "was identified and flipped the app to owned.")

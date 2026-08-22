@@ -10,7 +10,7 @@ import tasks as tasks_mod
 import worker as worker_mod
 from app import create_app
 from db import (db, init_db, Task, Download, update_download,
-                get_download_by_app)
+                get_download_by_app, get_download_by_id)
 from mock_ghostshop_portal import MockPortal, USER, PASS
 
 ZELDA_TID = '01007EF00011E000'
@@ -220,42 +220,190 @@ def test_failed_rows_arm_an_early_retry(library, monkeypatch):
     assert delta.total_seconds() < 16 * 60, "first retry within ~15 minutes"
 
 
-# --- stop & wipe ---
+# --- pause / resume / bulk row management ---
 
-def test_stop_all_cancels_tasks_wipes_rows_and_parts(library, portal, tmp_path):
-    """'Stop & delete all': tasks cancelled, every downloads row gone (history
-    included) and the .part residue wiped from disk."""
+def test_pause_ghost_marks_row_and_cancels_task(library, portal, tmp_path):
+    """Pausing a Ghost download: the row flips to paused FIRST, then its task is
+    cancelled - and the cancellation's cleanup leaves the paused row alone
+    (that is the whole point of writing paused before cancelling)."""
     settings = ghost_settings(portal, tmp_path)
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(tasks_mod, 'get_settings', lambda: settings)
     monkeypatch.setattr(downloader_lib, 'get_settings', lambda: settings)
 
-    downloader_lib.queue_ghosteshop_download(
+    row = downloader_lib.queue_ghosteshop_download(
         title_id=ZELDA_TID, app_id=ZELDA_UPD_TID, app_version='1114112',
         app_type='UPDATE', name='Zelda BOTW')
-    pass_task = tasks_mod.enqueue_task('downloader_ghosteshop_run', {'manual': True})[0]
-    child = tasks_mod.create_child_task(
-        pass_task.id, downloader_lib.GHOSTESHOP_DOWNLOAD_TASK,
-        {'app_id': ZELDA_UPD_TID, 'app_version': '1114112'})
-    db.session.add(Task(task_name='ghosteshop_download', status='running',
-                        worker_id=99, input_hash='h2',
-                        input_json='{"app_id": "0100AA000000E800", "app_version": "65536"}'))
-    db.session.commit()
+    update_download(row.id, status='downloading', progress=30)
+    task = tasks_mod.enqueue_task(downloader_lib.GHOSTESHOP_DOWNLOAD_TASK,
+                                  {'app_id': ZELDA_UPD_TID,
+                                   'app_version': '1114112'})[0]
 
-    part = tmp_path / 'Zelda' / (ZELDA_UPD_NAME + '.part')
-    part.parent.mkdir(exist_ok=True)
-    part.write_bytes(b'partial bytes')
-    (tmp_path / 'Zelda' / (ZELDA_UPD_NAME + '.part.state')).write_text('{}')
+    ok, msg = downloader_lib.pause_download(row.id)
 
-    removed = downloader_lib.stop_all_downloads()
-
-    assert removed >= 1
-    assert Download.query.count() == 0
-    assert Task.query.filter(Task.task_name.in_(
-        ['downloader_ghosteshop_run', 'ghosteshop_download'])).count() == 0
-    assert not part.exists()
-    assert not (tmp_path / 'Zelda' / (ZELDA_UPD_NAME + '.part.state')).exists()
+    assert ok
+    row = get_download_by_app(ZELDA_UPD_TID, '1114112')
+    assert row.status == 'paused'
+    assert row.progress == 30, "paused keeps where it was for the UI"
+    assert tasks_mod.Task.query.filter_by(id=task.id).first() is None, \
+        "the driving task is cancelled away"
     monkeypatch.undo()
+
+
+def test_resume_ghost_requeues_and_encoles_task(library, portal, tmp_path):
+    """Resuming: row back to queued and a fresh per-file task enqueued."""
+    settings = ghost_settings(portal, tmp_path)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(tasks_mod, 'get_settings', lambda: settings)
+    monkeypatch.setattr(downloader_lib, 'get_settings', lambda: settings)
+
+    row = downloader_lib.queue_ghosteshop_download(
+        title_id=ZELDA_TID, app_id=ZELDA_UPD_TID, app_version='1114112',
+        app_type='UPDATE', name='Zelda BOTW')
+    update_download(row.id, status='paused', progress=30)
+
+    ok, _msg = downloader_lib.resume_download(row.id)
+
+    assert ok
+    row = get_download_by_app(ZELDA_UPD_TID, '1114112')
+    assert row.status == 'queued'
+    assert row.progress == 0
+    tasks = tasks_mod.Task.query.filter_by(
+        task_name=downloader_lib.GHOSTESHOP_DOWNLOAD_TASK).all()
+    assert len(tasks) == 1
+    assert json.loads(tasks[0].input_json)['app_id'] == ZELDA_UPD_TID
+    monkeypatch.undo()
+
+
+def test_cleanup_hook_keeps_paused_rows(library):
+    """The cancellation cleanup must not requeue a row the user paused."""
+    row = downloader_lib.queue_ghosteshop_download(
+        title_id=ZELDA_TID, app_id=ZELDA_UPD_TID, app_version='1114112',
+        app_type='UPDATE', name='Zelda BOTW')
+    update_download(row.id, status='paused', progress=30)
+
+    tasks_mod._run_cleanup_hook(downloader_lib.GHOSTESHOP_DOWNLOAD_TASK,
+                                json.dumps({'app_id': ZELDA_UPD_TID,
+                                            'app_version': '1114112'}))
+    assert get_download_by_app(ZELDA_UPD_TID, '1114112').status == 'paused'
+
+
+class FakeQbtClient:
+    """Stands in for qbittorrent.QbittorrentClient in the pause/resume paths."""
+    def __init__(self, settings):
+        self.calls = []
+        self.torrents = FakeQbtClient.known
+        FakeQbtClient.calls = self.calls
+
+    known = [{'hash': 'a' * 40, 'name': 'Some Game', 'state': 'downloading',
+              'progress': 0.4}]
+
+    def login(self):
+        return True, None
+
+    def get_torrents(self, hashes=None, category=None):
+        return self.torrents
+
+    def find_hash_by_name(self, name, category=None):
+        return 'a' * 40 if self.torrents else None
+
+    def pause_torrent(self, info_hash):
+        self.calls.append(('pause', info_hash))
+        return True, None
+
+    def resume_torrent(self, info_hash):
+        self.calls.append(('resume', info_hash))
+        return True, None
+
+
+def _torrent_row(**kw):
+    defaults = dict(title_id='0100ABCDEFDEF000', app_id='0100ABCDEFDEF800',
+                    app_version='65536', app_type='UPDATE', name='Some Game',
+                    source='torrents', torrent_hash='a' * 40,
+                    torrent_name='Some Game', status='downloading', progress=40)
+    defaults.update(kw)
+    row = Download(**defaults)
+    db.session.add(row)
+    db.session.commit()
+    return row
+
+
+def test_pause_and_resume_torrent_calls_qbt(library, monkeypatch):
+    settings = {'downloader': {'torrents': {'qbittorrent': {'url': 'http://q'}}}}
+    monkeypatch.setattr(downloader_lib.qbittorrent, 'QbittorrentClient', FakeQbtClient)
+
+    row = _torrent_row()
+    ok, _msg = downloader_lib.pause_download(row.id, settings)
+    assert ok
+    assert get_download_by_id(row.id).status == 'paused'
+    assert FakeQbtClient.calls == [('pause', 'a' * 40)]
+
+    ok, _msg = downloader_lib.resume_download(row.id, settings)
+    assert ok
+    assert get_download_by_id(row.id).status == 'downloading'
+    assert FakeQbtClient.calls[-1] == ('resume', 'a' * 40)
+
+
+def test_resume_missing_torrent_fails_with_reason(library, monkeypatch):
+    settings = {'downloader': {'torrents': {'qbittorrent': {'url': 'http://q'}}}}
+    FakeQbtClient.known = []  # qBittorrent no longer has it
+    monkeypatch.setattr(downloader_lib.qbittorrent, 'QbittorrentClient', FakeQbtClient)
+
+    row = _torrent_row(status='paused', torrent_hash=None)
+    ok, msg = downloader_lib.resume_download(row.id, settings)
+    assert not ok
+    refreshed = get_download_by_id(row.id)
+    assert refreshed.status == 'failed'
+    assert 'no longer' in refreshed.error.lower()
+    FakeQbtClient.known = [{'hash': 'a' * 40, 'name': 'Some Game',
+                            'state': 'downloading', 'progress': 0.4}]
+
+
+def test_pause_all_pauses_unfinished_only(library, monkeypatch):
+    settings = {'downloader': {'torrents': {'qbittorrent': {'url': 'http://q'}}}}
+    monkeypatch.setattr(downloader_lib.qbittorrent, 'QbittorrentClient', FakeQbtClient)
+
+    active = _torrent_row()
+    queued = _torrent_row(app_id='0100ABCDEFDEF801', torrent_hash='b' * 40,
+                          status='queued', progress=0)
+    done = _torrent_row(app_id='0100ABCDEFDEF802', torrent_hash='c' * 40,
+                        status='completed', progress=100)
+
+    paused = downloader_lib.pause_all_downloads()
+
+    assert paused == 2
+    statuses = {r.app_id: r.status for r in Download.query.all()}
+    assert statuses[active.app_id] == 'paused'
+    assert statuses[queued.app_id] == 'paused'
+    assert statuses[done.app_id] == 'completed'
+
+
+def test_delete_completed_removes_only_completed(library):
+    done = _torrent_row(status='completed', progress=100)
+    failed = _torrent_row(app_id='0100ABCDEFDEF803', torrent_hash='d' * 40,
+                          status='failed', error='no match')
+    done_id, failed_id = done.id, failed.id
+
+    removed = downloader_lib.delete_completed_downloads()
+
+    assert removed == 1
+    assert get_download_by_id(done_id) is None
+    assert get_download_by_id(failed_id) is not None, "failed rows stay retryable"
+
+
+def test_sync_maps_qbittorrent_paused_state(library, monkeypatch):
+    """A torrent paused from qBittorrent's own UI surfaces as a paused row."""
+    settings = {'downloader': {'torrents': {'qbittorrent': {'url': 'http://q'}}}}
+    FakeQbtClient.known = [{'hash': 'a' * 40, 'name': 'Some Game',
+                            'state': 'pausedDL', 'progress': 0.4}]
+    monkeypatch.setattr(downloader_lib.qbittorrent, 'QbittorrentClient', FakeQbtClient)
+    row = _torrent_row()
+
+    downloader_lib.sync_downloads_status(settings)
+
+    assert get_download_by_id(row.id).status == 'paused'
+    FakeQbtClient.known = [{'hash': 'a' * 40, 'name': 'Some Game',
+                            'state': 'downloading', 'progress': 0.4}]
 
 
 # --- add content: owned by any version ---

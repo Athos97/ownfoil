@@ -4,20 +4,19 @@
 
     <div class="page-head">
         <h2>Downloads</h2>
-        <div class="page-head-controls">
-            <button type="button" id="stopDownloadsBtn" class="btn btn-danger"
-                onClick="stopAllDownloads()">Stop &amp; delete all</button>
-            <button type="button" id="runTorrentsBtn" class="btn btn-primary"
-                onClick="runDownloaderNow('TORRENTS')">Run torrents now</button>
-            <button type="button" id="runGhostBtn" class="btn btn-primary"
-                onClick="runDownloaderNow('GHOSTESHOP')">Run Ghost eShop now</button>
-        </div>
-        <p class="text-secondary mb-0 w-100">Content the downloader is fetching - torrents
-            via qBittorrent, direct transfers from Ghost eShop. A row completes when the
+        <p class="text-secondary mb-0 w-100">Content the downloader is fetching - torrents via
+            qBittorrent, direct transfers from Ghost eShop. A row completes when the
             library has identified the file.</p>
     </div>
 
     <div id="downloadsSummary" class="mb-3"></div>
+
+    <div class="d-flex flex-wrap gap-2 mb-3">
+        <button type="button" id="pauseAllBtn" class="btn btn-danger btn-sm"
+            onClick="pauseAll()">Stop all</button>
+        <button type="button" id="deleteFinishedBtn" class="btn btn-outline-secondary btn-sm"
+            onClick="deleteFinished()">Delete finished</button>
+    </div>
 
     <div id="downloadsTable" class="table-responsive">
         <table class="table table-hover align-middle">
@@ -59,22 +58,27 @@
             deleteDownload(id: $id)
         }`;
 
-    const RUN_MUTATION = `
-        mutation Run($source: DownloadSource!) {
-            runDownloader(source: $source) { id status }
+    const PAUSE_MUTATION = `
+        mutation Pause($id: ID!) {
+            pauseDownload(id: $id) { id status }
         }`;
 
-    const STOP_MUTATION = `
-        mutation Stop { stopDownloads }`;
+    const RESUME_MUTATION = `
+        mutation Resume($id: ID!) {
+            resumeDownload(id: $id) { id status }
+        }`;
 
-    async function stopAllDownloads() {
-        if (!confirm('Stop every download and DELETE all rows and partial files?')) {
-            return;
-        }
-        const btn = $('#stopDownloadsBtn').prop('disabled', true);
+    const PAUSE_ALL_MUTATION = `
+        mutation PauseAll { pauseAllDownloads }`;
+
+    const DELETE_FINISHED_MUTATION = `
+        mutation DeleteFinished { deleteCompletedDownloads }`;
+
+    async function pauseAll() {
+        const btn = $('#pauseAllBtn').prop('disabled', true);
         try {
-            await mutate(STOP_MUTATION);
-            // The realtime topic will drain the table; nothing else to do.
+            const data = await mutate(PAUSE_ALL_MUTATION);
+            // The realtime topic streams the paused rows in; nothing else to do.
         } catch (e) {
             console.error(e);
         } finally {
@@ -82,15 +86,37 @@
         }
     }
 
-    async function runDownloaderNow(source) {
-        const btn = source === 'TORRENTS' ? $('#runTorrentsBtn') : $('#runGhostBtn');
-        btn.prop('disabled', true);
+    async function deleteFinished() {
+        if (!confirm('Remove the completed rows from this log? (Failed rows stay)')) {
+            return;
+        }
+        const btn = $('#deleteFinishedBtn').prop('disabled', true);
         try {
-            await mutate(RUN_MUTATION, {source: source});
+            await mutate(DELETE_FINISHED_MUTATION);
         } catch (e) {
             console.error(e);
         } finally {
             btn.prop('disabled', false);
+        }
+    }
+
+    async function pauseDownload(id) {
+        $(`.dl-pause[data-id="${id}"]`).prop('disabled', true);
+        try {
+            await mutate(PAUSE_MUTATION, {id: String(id)});
+        } catch (e) {
+            console.error(e);
+            $(`.dl-pause[data-id="${id}"]`).prop('disabled', false);
+        }
+    }
+
+    async function resumeDownload(id) {
+        $(`.dl-resume[data-id="${id}"]`).prop('disabled', true);
+        try {
+            await mutate(RESUME_MUTATION, {id: String(id)});
+        } catch (e) {
+            console.error(e);
+            $(`.dl-resume[data-id="${id}"]`).prop('disabled', false);
         }
     }
 
@@ -155,6 +181,7 @@
         const map = {
             queued: 'text-bg-secondary',
             downloading: 'text-bg-info',
+            paused: 'text-bg-warning',
             completed: 'text-bg-success',
             failed: 'text-bg-danger',
         };
@@ -213,17 +240,29 @@
         cells[8].textContent = d.createdAt
             ? new Date(d.createdAt).toLocaleString() : '';
 
+        const canPause = d.status === 'downloading' || d.status === 'queued';
+        const canResume = d.status === 'paused';
         const canRetry = d.status === 'failed';
-        const canDelete = d.status === 'failed' || d.status === 'completed';
+        const canDelete = d.status !== 'downloading' && d.status !== 'queued';
         cells[9].innerHTML = `
-            <button type="button" class="icon-btn dl-retry" data-id="${d.id}" title="Retry"
-                ${canRetry ? '' : 'disabled'}>
-                <i class="bi bi-arrow-clockwise"></i>
-            </button>
-            <button type="button" class="icon-btn dl-delete" data-id="${d.id}" title="Remove"
-                ${canDelete ? '' : 'disabled'}>
-                <i class="bi bi-trash"></i>
-            </button>`;
+            ${canPause ? `
+                <button type="button" class="icon-btn dl-pause" data-id="${d.id}"
+                    title="Pause (resumable)">
+                    <i class="bi bi-pause-fill"></i>
+                </button>` : ''}
+            ${canResume ? `
+                <button type="button" class="icon-btn dl-resume" data-id="${d.id}"
+                    title="Resume - continues from where it stopped, or restarts if the partial is stale">
+                    <i class="bi bi-play-fill"></i>
+                </button>` : ''}
+            ${canRetry ? `
+                <button type="button" class="icon-btn dl-retry" data-id="${d.id}" title="Retry">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>` : ''}
+            ${canDelete ? `
+                <button type="button" class="icon-btn dl-delete" data-id="${d.id}" title="Remove">
+                    <i class="bi bi-trash"></i>
+                </button>` : ''}`;
     }
 
     function render() {
@@ -252,10 +291,11 @@
         const counts = {};
         list.forEach(d => { counts[d.status] = (counts[d.status] || 0) + 1; });
         const summary = document.getElementById('downloadsSummary');
-        summary.innerHTML = ['downloading', 'queued', 'completed', 'failed'].map(status => `
+        summary.innerHTML = ['downloading', 'queued', 'paused', 'completed', 'failed'].map(status => `
             <span class="badge ${({
                 downloading: 'text-bg-info',
                 queued: 'text-bg-secondary',
+                paused: 'text-bg-warning',
                 completed: 'text-bg-success',
                 failed: 'text-bg-danger',
             })[status]} me-1">${status}: ${counts[status] || 0}</span>`).join('');
@@ -266,10 +306,12 @@
     // Action buttons are delegated: updateRow rewrites the action cell's innerHTML on
     // every render, which would orphan any listener attached to a button element.
     document.getElementById('downloadsBody').addEventListener('click', e => {
-        const btn = e.target.closest('.dl-retry, .dl-delete');
+        const btn = e.target.closest('.dl-retry, .dl-delete, .dl-pause, .dl-resume');
         if (!btn || btn.disabled) return;
         const id = Number(btn.dataset.id);
         if (btn.classList.contains('dl-retry')) retryDownload(id);
+        else if (btn.classList.contains('dl-pause')) pauseDownload(id);
+        else if (btn.classList.contains('dl-resume')) resumeDownload(id);
         else deleteDownload(id);
     });
 

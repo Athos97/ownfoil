@@ -55,7 +55,11 @@ The worker section shows what each worker process is doing right now. How many t
 
 ## Downloads page
 
-Admin only. Every transfer the downloaders have picked: torrents handed to qBittorrent and direct Ghost eShop downloads, with live progress for the latter. A row flips to `completed` when the library watcher has identified the landed file - not merely when the transfer finished. Failed rows can be retried (through their own source) or removed.
+Admin only. Every transfer the downloaders have picked: torrents handed to qBittorrent and direct Ghost eShop downloads, with live progress for the latter. A row flips to `completed` when the library watcher has identified the landed file - not merely when the transfer finished.
+
+- **Pause / resume** per row: pausing a Ghost eShop transfer cancels it and keeps the partial file; resuming continues from it when still valid (an expired token restarts the transfer from scratch). Torrents pause and resume in qBittorrent - including pauses made from qBittorrent's own UI, which the next pass reflects.
+- **Stop all** pauses every unfinished download (queued and transferring, both sources) - rows stay, each resumable.
+- **Delete finished** clears the completed rows; failed ones stay retryable until dismissed.
 
 ## Manage Library page
 

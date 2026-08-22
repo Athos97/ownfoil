@@ -50,6 +50,8 @@ QB_ERROR_STATES = ('error', 'missingFiles', 'unknown')
 QB_ACTIVE_STATES = ('downloading', 'uploading', 'stalledDL', 'stalledUP',
                     'queuedDL', 'queuedUP', 'checkingDL', 'checkingUP',
                     'metaDL', 'forcedDL', 'forcedUP', 'moving')
+# qBittorrent <5 says pausedDL/pausedUP; 5+ says stoppedDL/stoppedUP.
+QB_PAUSED_STATES = ('pausedDL', 'pausedUP', 'stoppedDL', 'stoppedUP')
 
 # Progress rows are written at most this often while a Ghost eShop file streams;
 # the realtime topic polls the table at 0.25s, so faster writes buy nothing.
@@ -505,11 +507,14 @@ def download_target_ghosteshop(target, settings, existing_row=None, task_id=None
         logger.info(f"[ghosteshop] Downloaded {entry.name}")
         return True
     except TransferCancelled:
-        # Cooperative abort: the cleanup hook owns putting the row back to
-        # queued, keeping the .part for a cheap resume.
+        # Cooperative abort. 'paused' was written before cancelling (that is how
+        # pausing works) - keep it; any other cancellation goes back to queued
+        # for the next pass, the .part surviving for a cheap resume either way.
         logger.info(f"[ghosteshop] Transfer of {entry.name} cancelled.")
-        update_download(row.id, status='queued', progress=0,
-                        error='Cancelled - will resume on the next pass')
+        db.session.refresh(row)
+        if row.status != 'paused':
+            update_download(row.id, status='queued', progress=0,
+                            error='Cancelled - will resume on the next pass')
         return False
     except ghostshop.GhostshopError as e:
         update_download(row.id, status='failed', error=str(e))
@@ -537,7 +542,12 @@ def queue_ghosteshop_download(title_id, app_id, app_version, app_type, name):
 # -------------------------------------------------------------------- shared
 
 def sync_downloads_status(settings):
-    """Reconcile queued/downloading rows against qBittorrent and app ownership."""
+    """Reconcile queued/downloading rows against qBittorrent and app ownership.
+
+    Paused rows are deliberately untouched: pausing is a user decision, and
+    reconciling them back to 'downloading' (or into a pass) would undo it. The
+    one exception runs the other way - a torrent paused from qBittorrent's own
+    UI flips our row to 'paused' so the two views agree."""
     in_progress = get_downloads_in_progress()
     if not in_progress:
         return
@@ -558,6 +568,17 @@ def sync_downloads_status(settings):
                 if nm:
                     qb_by_name[nm] = t
 
+    # Also reconcile paused torrent rows: qBittorrent-side pauses surface here.
+    paused_torrent_rows = [d for d in Download.query.filter_by(status='paused').all()
+                           if (d.source or SOURCE_TORRENTS) == SOURCE_TORRENTS]
+    if paused_torrent_rows and not needs_qbt:
+        needs_qbt = True
+        client = qbittorrent.QbittorrentClient(qbt_settings)
+        ok, _ = client.login()
+        if ok:
+            for t in client.get_torrents(category=qbt_settings.get('category')):
+                qb_states[(t.get('hash') or '').lower()] = t
+
     for d in in_progress:
         if is_app_owned(d.app_id, d.app_version):
             update_download(d.id, status='completed', error=CLEAR_ERROR, progress=100)
@@ -576,6 +597,8 @@ def sync_downloads_status(settings):
             state = t.get('state') or ''
             if state in QB_ERROR_STATES:
                 update_download(d.id, status='failed', error=f'qBittorrent state: {state}')
+            elif state in QB_PAUSED_STATES:
+                update_download(d.id, status='paused')
             elif state in QB_ACTIVE_STATES:
                 progress = int(float(t.get('progress') or 0) * 100)
                 update_download(d.id, status='downloading', progress=progress)
@@ -814,35 +837,136 @@ def run_downloader_job(settings=None, progress=None):
         logger.error(f'Downloader job (torrents) failed: {e}')
 
 
-def stop_all_downloads():
-    """Full stop: cancel every live downloader task, wipe the downloads table
-    and delete the orphaned .part files. What the admin means by 'stop and
-    delete everything' - nothing queued, nothing transferring, no residue.
+def _live_ghost_task_id(app_id, app_version):
+    """The pending/running per-file task driving this target, if any."""
+    from db import Task
+    return Task.query.filter(
+        Task.task_name == GHOSTESHOP_DOWNLOAD_TASK,
+        Task.status.in_(('pending', 'running')),
+        Task.input_json.contains(f'"{app_id}"'),
+    ).first()
 
-    qBittorrent keeps its own torrents (its queue is not ours to wipe); rows
-    and files owned by ownfoil all go."""
-    import tasks as tasks_mod
 
-    # Cancel the passes first (walks pending children away), then any live
-    # per-file task - cancel restarts the driving worker, killing the transfer.
-    rows = db.session.execute(text(
-        "SELECT id FROM tasks WHERE task_name IN (:pass_task, :file_task) "
-        "AND status IN ('pending', 'running', 'waiting_for_children') "
-        "ORDER BY id").bindparams(pass_task='downloader_ghosteshop_run',
-                                  file_task=GHOSTESHOP_DOWNLOAD_TASK)).all()
-    for (task_id,) in rows:
+def pause_download(download_id, settings=None):
+    """Pause one unfinished download (queued or transferring). Returns (ok, msg).
+
+    Ghost: the row flips to 'paused' FIRST, then its task is cancelled - the
+    cooperative abort stops the transfer and both the cancellation handler and
+    the cleanup hook leave an already-paused row alone, keeping the .part for a
+    cheap resume. Torrents: qBittorrent pauses the torrent; if it is already
+    gone from the client, the row fails with the reason."""
+    settings = settings or get_settings()
+    d = get_download_by_id(download_id)
+    if d is None:
+        return False, 'Download not found'
+    if d.status not in ('queued', 'downloading'):
+        return False, f'Cannot pause a {d.status} download'
+
+    if (d.source or SOURCE_TORRENTS) == SOURCE_GHOSTESHOP:
+        update_download(d.id, status='paused')
+        task = _live_ghost_task_id(d.app_id, str(d.app_version))
+        if task is not None:
+            import tasks as tasks_mod
+            try:
+                tasks_mod.cancel_task(task.id)  # runs the cleanup hook, which
+                # skips rows already paused
+            except Exception as e:
+                logger.warning(f"[pause] Cancelling task {task.id} failed: {e}")
+        logger.info(f"[pause] {d.app_id} v{d.app_version} paused "
+                    f"({'task cancelled' if task else 'was not running'}).")
+        return True, 'Paused'
+
+    # Torrents lane
+    qbt_settings = ((settings.get('downloader', {}) or {}).get('torrents', {})
+                    or {}).get('qbittorrent', {}) or {}
+    client = qbittorrent.QbittorrentClient(qbt_settings)
+    ok, err = client.login()
+    if not ok:
+        update_download(d.id, status='failed', error=f'qBittorrent: {err}')
+        return False, err
+    info_hash = d.torrent_hash or client.find_hash_by_name(d.torrent_name,
+                                                           qbt_settings.get('category'))
+    if info_hash:
+        d.torrent_hash = info_hash
+        db.session.commit()
+    else:
+        reason = 'Torrent no longer in qBittorrent - retry to re-search'
+        update_download(d.id, status='failed', error=reason)
+        return False, reason
+    ok, err = client.pause_torrent(info_hash)
+    if not ok:
+        return False, err
+    update_download(d.id, status='paused')
+    logger.info(f"[pause] torrent {info_hash} paused.")
+    return True, 'Paused'
+
+
+def resume_download(download_id, settings=None):
+    """Resume a paused download. Returns (ok, msg).
+
+    Ghost: back to queued with a fresh per-file task - the existing chunk
+    resume continues from the .part when its leading chunks still match, and
+    restarts from scratch when they do not (expired token or changed plan).
+    Torrents: qBittorrent resumes; a torrent that vanished fails the row with
+    a reason (retry re-searches)."""
+    settings = settings or get_settings()
+    d = get_download_by_id(download_id)
+    if d is None:
+        return False, 'Download not found'
+    if d.status != 'paused':
+        return False, f'Cannot resume a {d.status} download'
+
+    if (d.source or SOURCE_TORRENTS) == SOURCE_GHOSTESHOP:
+        update_download(d.id, status='queued', progress=0, error=CLEAR_ERROR)
+        import tasks as tasks_mod
+        tasks_mod.enqueue_task(GHOSTESHOP_DOWNLOAD_TASK, {
+            'app_id': d.app_id, 'app_version': str(d.app_version),
+            'name': d.name, 'title_id': d.title_id, 'app_type': d.app_type})
+        logger.info(f"[resume] {d.app_id} v{d.app_version} requeued.")
+        return True, 'Resumed'
+
+    qbt_settings = ((settings.get('downloader', {}) or {}).get('torrents', {})
+                    or {}).get('qbittorrent', {}) or {}
+    client = qbittorrent.QbittorrentClient(qbt_settings)
+    ok, err = client.login()
+    if not ok:
+        return False, f'qBittorrent: {err}'
+    info_hash = d.torrent_hash or client.find_hash_by_name(d.torrent_name,
+                                                           qbt_settings.get('category'))
+    if not info_hash:
+        reason = 'Torrent no longer in qBittorrent - retry to re-search'
+        update_download(d.id, status='failed', error=reason)
+        return False, reason
+    ok, err = client.resume_torrent(info_hash)
+    if not ok:
+        return False, err
+    update_download(d.id, status='downloading')
+    logger.info(f"[resume] torrent {info_hash} resumed.")
+    return True, 'Resumed'
+
+
+def pause_all_downloads():
+    """Pause every unfinished download (queued and transferring). Rows stay -
+    pausable is reversible; resuming is one click per row. Returns how many
+    were paused."""
+    paused = 0
+    for d in Download.query.filter(Download.status.in_(['queued', 'downloading'])).all():
         try:
-            tasks_mod.cancel_task(task_id)
+            ok, _msg = pause_download(d.id)
+            paused += 1 if ok else 0
         except Exception as e:
-            logger.warning(f"[stop] Cancelling task {task_id} failed: {e}")
+            logger.warning(f"[pause-all] {d.app_id}: {e}")
+    logger.info(f"[pause-all] Paused {paused} download(s).")
+    return paused
 
-    removed = Download.query.count()
-    Download.query.delete()
+
+def delete_completed_downloads():
+    """Remove finished rows (completed only). Failed rows stay: they are
+    retryable and the log of what went wrong. Returns how many went."""
+    removed = Download.query.filter_by(status='completed').delete()
     db.session.commit()
-
-    # Rows are gone, so every .part is an orphan now.
-    _gc_orphan_part_files()
-    logger.info(f"[stop] Downloads wiped: {removed} row(s), tasks cancelled: {len(rows)}.")
+    if removed:
+        logger.info(f"[downloads] Deleted {removed} completed row(s).")
     return removed
 
 

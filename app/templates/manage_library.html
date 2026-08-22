@@ -174,11 +174,12 @@
     function renderTiles() {
         const queued = Object.values(flight).filter(d => d.status === 'queued').length;
         const active = Object.values(flight).filter(d => d.status === 'downloading').length;
+        const paused = Object.values(flight).filter(d => d.status === 'paused').length;
         const failed = Object.values(flight).filter(d => d.status === 'failed').length;
         const missing = (missingTargets || []).length;
         const tiles = [
             ['Missing content', missing, 'updates & DLCs not in the library'],
-            ['Transferring', active, `${queued} queued behind them`],
+            ['Transferring', active, `${queued} queued · ${paused} paused`],
             ['Failures', failed, failed ? 'retry them below' : 'nothing failed'],
         ];
         const container = document.getElementById('manageTiles');
@@ -297,7 +298,7 @@
         renderTiles();
 
         const active = Object.values(flight)
-            .filter(d => d.status === 'downloading' || d.status === 'queued' || d.status === 'failed')
+            .filter(d => ['downloading', 'queued', 'failed', 'paused'].includes(d.status))
             .sort((a, b) => b.id - a.id);
         const rows = [];
 
@@ -312,8 +313,10 @@
                     <td style="min-width: 10rem;">
                         ${d.status === 'failed'
                             ? `<span class="badge text-bg-danger" title="${esc(d.error || '')}">failed</span>`
-                            : pct === null
-                                ? '<span class="badge text-bg-secondary">queued</span>'
+                            : d.status === 'paused'
+                                ? '<span class="badge text-bg-warning">paused</span>'
+                                : pct === null
+                                    ? '<span class="badge text-bg-secondary">queued</span>'
                                 : `<div class="progress" style="height: 1rem;">
                                        <div class="progress-bar" role="progressbar" style="width: ${pct}%;">${pct}%</div>
                                    </div>`}
@@ -330,6 +333,8 @@
         missingTargets.forEach(t => {
             const claimed = active.some(d =>
                 d.appId === t.appId && String(d.appVersion) === String(t.appVersion));
+            // A paused row for this target also suppresses the 'pending' dup.
+            if (claimed) return;
             if (claimed) return;  // already listed above with its live state
             rows.push(`
                 <tr>

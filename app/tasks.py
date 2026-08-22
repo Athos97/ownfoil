@@ -846,7 +846,9 @@ def ghosteshop_download_task(app_id, app_version, name=None, **kwargs):
 def _ghosteshop_download_cleanup(app_id, app_version, name=None, **kwargs):
     """A cancelled/killed transfer puts its row back to queued instead of leaving
     it 'downloading' forever - the orphan healing only runs at the next pass,
-    which can be a day out. The .part file stays: resuming is cheap."""
+    which can be a day out. The .part file stays: resuming is cheap. A row
+    already 'paused' keeps that state - pausing wrote it before cancelling
+    precisely so the cancellation would not requeue it."""
     from db import get_download_by_app, update_download
     row = get_download_by_app(app_id, str(app_version))
     if row is None or row.status not in ('downloading', 'queued'):
