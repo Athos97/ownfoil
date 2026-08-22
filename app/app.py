@@ -298,11 +298,17 @@ def downloads_page():
     return render_template('downloads.html', title='Downloads',
                            admin_account_created=admin_account_created())
 
+@app.route('/admin/manage')
+@access_required('admin')
+def manage_library_page():
+    return render_template('manage_library.html', title='Manage Library',
+                           admin_account_created=admin_account_created())
+
 @app.route('/admin/update')
 @access_required('admin')
 def update_library_page():
-    return render_template('update.html', title='Update Library',
-                           admin_account_created=admin_account_created())
+    """Merged into Manage Library; kept as a redirect for bookmarks."""
+    return redirect('/admin/manage')
 
 @app.route('/admin/activity')
 @access_required('admin')
@@ -315,8 +321,8 @@ def activity_page():
 @app.route('/admin/add-content')
 @access_required('admin')
 def add_content_page():
-    return render_template('add_content.html', title='Add Content',
-                           admin_account_created=admin_account_created())
+    """Merged into Manage Library; kept as a redirect for bookmarks."""
+    return redirect('/admin/manage')
 
 @app.route('/game/<title_id>')
 def game_detail_page(title_id):

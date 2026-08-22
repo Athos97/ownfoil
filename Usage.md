@@ -57,16 +57,16 @@ The worker section shows what each worker process is doing right now. How many t
 
 Admin only. Every transfer the downloaders have picked: torrents handed to qBittorrent and direct Ghost eShop downloads, with live progress for the latter. A row flips to `completed` when the library watcher has identified the landed file - not merely when the transfer finished. Failed rows can be retried (through their own source) or removed.
 
-## Update Library page
+## Manage Library page
 
-Admin only. Shows the missing-content work list both download sources draw from: the latest unowned update of every title and every unowned DLC. Each source gets a card with its readiness, schedule and a manual **Update now** button; in-flight transfers stream below. Sources are configured in [Settings](#settings-page); the two never race for the same target.
+Admin only, right below Settings in the menu. Everything about library content in one place:
 
-## Add Content page
+- live summary tiles (missing content, transfers in flight, failures)
+- one card per download source (Ghost eShop, torrents) with its readiness, schedule and a manual **Update now**
+- a unified live table of pending and in-flight work - missing targets and active transfers together, with progress bars and per-row actions (retry a failure)
+- **Add content**: search the Ghost eShop catalog by name (structured base/updates/DLCs with sizes and owned badges; queueing downloads exactly the chosen entries right away) or search trackers through Jackett and hand a pick to qBittorrent
 
-Admin only. Two ways to bring games you do not own yet into the library:
-
-- **Ghost eShop**: search the catalog by name, pick a game, and choose among its base, updates and DLCs (with real sizes and owned badges). Queued items download into the game's own folder on the next Ghost eShop pass - or run it right away from Update Library.
-- **Torrents**: search your Jackett indexers with free text and hand any result straight to qBittorrent, using the torrents source's save path and category.
+The old Update Library and Add Content addresses redirect here.
 
 ## Activity page
 

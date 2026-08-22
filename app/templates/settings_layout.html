@@ -12,6 +12,11 @@
                     </a>
                 </li>
                 <li class="nav-item">
+                    <a class="nav-link{% if request.path.startswith('/admin/manage') %} active{% endif %}" href="/admin/manage">
+                        Manage Library
+                    </a>
+                </li>
+                <li class="nav-item">
                     <a class="nav-link{% if request.path.startswith('/admin/tasks') %} active{% endif %}" href="/admin/tasks">
                         Tasks
                     </a>
@@ -19,16 +24,6 @@
                 <li class="nav-item">
                     <a class="nav-link{% if request.path.startswith('/admin/downloads') %} active{% endif %}" href="/admin/downloads">
                         Downloads
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link{% if request.path.startswith('/admin/update') %} active{% endif %}" href="/admin/update">
-                        Update Library
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link{% if request.path.startswith('/admin/add-content') %} active{% endif %}" href="/admin/add-content">
-                        Add Content
                     </a>
                 </li>
                 <li class="nav-item">

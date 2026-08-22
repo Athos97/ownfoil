@@ -2,11 +2,19 @@
 {% block panel %}
 <div class="settings-container container mt-3">
 
-    <h2>Tasks</h2>
-    <p class="text-secondary">Live view of the background work queue. Updates stream from
-        the server as tasks progress.</p>
+    <div class="page-head">
+        <h2>Tasks</h2>
+        <div class="page-head-controls">
+            <button type="button" id="refreshHistory" class="icon-btn" onClick="loadHistory()"
+                    title="Refresh history">
+                <i class="bi bi-arrow-clockwise"></i>
+            </button>
+        </div>
+        <p class="text-secondary mb-0 w-100">Background work queue, live.</p>
+    </div>
 
-    <h4 class="mt-4 mb-3">Queue</h4>
+    <div id="taskTiles" class="stat-grid mb-4"></div>
+
     <div class="task-scroll">
         <ul id="queueTasks" class="task-list"></ul>
     </div>
@@ -30,6 +38,22 @@
     </div>
     <p id="failedEmpty" class="text-secondary fst-italic">No failures.</p>
 
+    <h4 class="mt-4 mb-3">History <span class="text-secondary fw-normal small">(last 100)</span></h4>
+    <div id="historyTable" class="table-responsive">
+        <table class="table table-sm table-hover align-middle">
+            <thead>
+                <tr>
+                    <th scope="col"></th>
+                    <th scope="col">Task</th>
+                    <th scope="col">Duration</th>
+                    <th scope="col">Finished</th>
+                </tr>
+            </thead>
+            <tbody id="historyBody"></tbody>
+        </table>
+    </div>
+    <p id="historyEmpty" class="text-secondary fst-italic">Nothing ran yet.</p>
+
     <hr class="hr-settings">
     <h2 class="pb-2">Workers</h2>
     <div id="workerCards" class="row g-3"></div>
@@ -39,6 +63,7 @@
 
 {% block panel_scripts %}
 <script src="{{ url_for('static', filename='js/realtime.js') }}"></script>
+<script src="{{ url_for('static', filename='js/format.js') }}"></script>
 <script>
 
     const CANCEL_MUTATION = `
@@ -54,6 +79,13 @@
     const PURGE_MUTATION = `
         mutation Purge {
             purgeFailedTasks
+        }`;
+
+    const HISTORY_QUERY = `
+        query History {
+            taskHistory(limit: 100) {
+                id taskName displayName status error completedAt durationMs
+            }
         }`;
 
     // Task rows the server has dropped. Kept on screen briefly so work that finishes
@@ -190,11 +222,11 @@
         if (!task.startedAt) return '';
 
         const elapsed = clockNow() - new Date(task.startedAt).getTime();
-        let meta = `running for ${humanizeDuration(elapsed)}`;
+        let meta = `${humanizeDuration(elapsed)}`;
         if (task.completionPct > 0 && task.completionPct < 100) {
             // The bar is too slim to hold a legible label, so the percentage lives here.
             const remaining = elapsed / (task.completionPct / 100) - elapsed;
-            meta = `${task.completionPct}% — ${meta} — ${humanizeDuration(remaining)} left`;
+            meta = `${task.completionPct}% · ${meta} · ${humanizeDuration(remaining)} left`;
         }
         return meta;
     }
@@ -238,7 +270,7 @@
             <div class="task-head">
                 <span class="task-icon"></span>
                 <span class="task-name"></span>
-                <span class="task-meta text-secondary"></span>
+                <span class="task-meta text-secondary small"></span>
                 <button type="button" class="icon-btn task-cancel" data-id="${task.id}" title="Cancel">
                     <i class="bi bi-x-lg"></i>
                 </button>
@@ -328,6 +360,83 @@
         document.getElementById(emptyId).classList.toggle('d-none', count > 0);
     }
 
+    function renderTiles() {
+        const live = Object.values(tasks).filter(t => !t.done);
+        const queued = live.filter(t => t.status === 'pending' && !t.runAfter).length;
+        const running = live.filter(t => t.status === 'running' || t.status === 'waiting_for_children').length;
+        const scheduled = live.filter(t => t.status === 'pending' && t.runAfter).length;
+        const failed = live.filter(t => t.status === 'failed').length;
+        const tiles = [
+            ['Queued', queued, 'waiting for a worker'],
+            ['Running', running, 'in flight right now'],
+            ['Scheduled', scheduled, 'future periodic runs'],
+            ['Failed', failed, failed ? 'need attention' : 'all good'],
+        ];
+        const container = document.getElementById('taskTiles');
+        container.innerHTML = '';
+        tiles.forEach(([label, value, note]) => {
+            const tile = document.createElement('div');
+            tile.innerHTML = `<div class="stat-value ${label === 'Failed' && value ? 'text-danger' : ''}">${Number(value).toLocaleString()}</div>
+                <div class="stat-label">${label}</div>
+                <div class="stat-note">${note}</div>`;
+            container.appendChild(tile);
+        });
+    }
+
+    const HISTORY_ICONS = {
+        completed: '<i class="bi bi-check-circle-fill text-success"></i>',
+        failed:    '<i class="bi bi-exclamation-circle-fill text-danger"></i>',
+        cancelled: '<i class="bi bi-slash-circle-fill text-secondary"></i>',
+    };
+
+    async function loadHistory() {
+        const params = new URLSearchParams({query: HISTORY_QUERY});
+        let data;
+        try {
+            const r = await fetch('/api/graphql?' + params.toString(), {
+                headers: {'Accept': 'application/json'},
+                credentials: 'same-origin',
+            });
+            const body = await r.json();
+            if (body.errors) throw new Error(JSON.stringify(body.errors));
+            data = body.data.taskHistory || [];
+        } catch (e) {
+            console.error(e);
+            return;
+        }
+        const tbody = document.getElementById('historyBody');
+        tbody.innerHTML = '';
+        document.getElementById('historyEmpty').classList.toggle('d-none', data.length > 0);
+        document.getElementById('historyTable').classList.toggle('d-none', data.length === 0);
+        data.forEach(h => {
+            const tr = document.createElement('tr');
+            const icon = HISTORY_ICONS[h.status] ||
+                `<i class="bi bi-question-circle-fill text-secondary"></i>`;
+            const title = h.error ? `${h.displayName || h.taskName}\n${h.error}` :
+                                     h.displayName || h.taskName;
+            tr.innerHTML = `
+                <td>${icon}</td>
+                <td class="fw-semibold text-truncate" style="max-width: 24rem;"></td>
+                <td class="text-secondary"></td>
+                <td class="text-secondary"></td>`;
+            tr.children[1].textContent = h.displayName || h.taskName;
+            tr.children[1].title = title;
+            tr.children[2].textContent = h.durationMs != null ? humanizeDuration(h.durationMs) : '—';
+            tr.children[3].textContent = h.completedAt
+                ? new Date(h.completedAt).toLocaleString() : '';
+            tbody.appendChild(tr);
+        });
+    }
+
+    let historyDebounce = null;
+
+    function loadHistorySoon() {
+        // One live row ending is one history row appearing - but a finished parent
+        // removes several rows at once. Coalesce.
+        clearTimeout(historyDebounce);
+        historyDebounce = setTimeout(loadHistory, 1500);
+    }
+
     function renderWorkers() {
         const container = document.getElementById('workerCards');
         container.innerHTML = '';
@@ -384,6 +493,7 @@
         // avoids asking it for a total nothing else needs.
         document.getElementById('queueTruncated').classList.toggle(
             'd-none', Object.keys(tasks).length < MAX_TASKS);
+        renderTiles();
         renderWorkers();
     }
 
@@ -411,6 +521,7 @@
             cancelled: wasCancelled,
             completionPct: wasCancelled ? known.completionPct : 100,
         });
+        loadHistorySoon();
         setTimeout(() => {
             const li = document.querySelector(`.task-row[data-id="${task.id}"]`);
             if (li) li.classList.add('task-fading');
@@ -462,6 +573,8 @@
     // Elapsed times and countdowns move on their own, without a server event — but only
     // while connected, since nothing on a frozen page changes between ticks.
     setInterval(() => { if (stoppedAt === null) scheduleRender(); }, 1000);
+
+    loadHistory();
 
 </script>
 {% endblock %}
