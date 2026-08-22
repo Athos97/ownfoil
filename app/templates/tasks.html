@@ -33,8 +33,19 @@
             <i class="bi bi-trash"></i>
         </button>
     </div>
-    <div class="task-scroll">
-        <ul id="failedTasks" class="task-list"></ul>
+    <div id="failedTable" class="table-responsive">
+        <table class="table table-sm table-hover align-middle">
+            <thead>
+                <tr>
+                    <th scope="col"></th>
+                    <th scope="col">Task</th>
+                    <th scope="col">Duration</th>
+                    <th scope="col">Failed at</th>
+                    <th scope="col"></th>
+                </tr>
+            </thead>
+            <tbody id="failedBody"></tbody>
+        </table>
     </div>
     <p id="failedEmpty" class="text-secondary fst-italic">No failures.</p>
 
@@ -164,12 +175,12 @@
 
     async function dismissTask(id) {
         const key = String(id);
-        $(`.task-cancel[data-id="${id}"]`).prop('disabled', true);
+        $(`.failed-dismiss[data-id="${id}"]`).prop('disabled', true);
         try {
             if ((await mutate(DISMISS_MUTATION, {id: key})).dismissTask) forget([key]);
         } catch (e) {
             console.error(e);
-            $(`.task-cancel[data-id="${id}"]`).prop('disabled', false);
+            $(`.failed-dismiss[data-id="${id}"]`).prop('disabled', false);
         }
     }
 
@@ -437,6 +448,73 @@
         historyDebounce = setTimeout(loadHistory, 1500);
     }
 
+    // --- Failed table: history's shape, with the error spelled out ---
+
+    /** Failed roots newest first, each followed by its surviving sub-tasks. */
+    function collectFailed() {
+        const failedRoots = Object.values(tasks)
+            .filter(t => t.status === 'failed' && !t.done)
+            .filter(t => t.parentId === null || !(t.parentId in tasks))
+            .sort((a, b) => b.id - a.id);
+        const rows = [];
+        failedRoots.forEach(root => {
+            rows.push(root);
+            childrenOf(root.id).filter(c => !c.done).forEach(c => rows.push(c));
+        });
+        return rows;
+    }
+
+    function renderFailedTable() {
+        const tbody = document.getElementById('failedBody');
+        const list = collectFailed();
+        tbody.innerHTML = '';
+        const failedCount = Object.values(tasks)
+            .filter(t => t.status === 'failed' && !t.done).length;
+        document.getElementById('failedEmpty').classList.toggle('d-none', list.length > 0);
+        document.getElementById('failedTable').classList.toggle('d-none', list.length === 0);
+        document.getElementById('purgeFailed').classList.toggle('d-none', !failedCount);
+
+        list.forEach(task => {
+            const isChild = task.parentId != null && task.parentId in tasks;
+            const started = task.startedAt ? new Date(task.startedAt).getTime() : null;
+            const finished = task.completedAt ? new Date(task.completedAt).getTime() : null;
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${ICONS[statusIconKey(task)]}</td>
+                <td>
+                    <div class="fw-semibold text-truncate ${isChild ? 'text-secondary fw-normal ps-3' : ''}"
+                         style="max-width: 24rem;"></div>
+                    <div class="small text-danger text-break" style="max-width: 40rem;"></div>
+                </td>
+                <td class="text-secondary"></td>
+                <td class="text-secondary"></td>
+                <td class="text-end"></td>`;
+            const nameDiv = tr.children[1].children[0];
+            const errDiv = tr.children[1].children[1];
+            nameDiv.textContent = task.displayName;
+            if (task.status === 'failed') {
+                // History carries the error on a tooltip; a live failure the user
+                // must act on deserves it in full, right under the name.
+                errDiv.textContent = task.errorMessage || 'failed';
+                nameDiv.title = task.displayName;
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'icon-btn failed-dismiss';
+                btn.dataset.id = task.id;
+                btn.title = 'Dismiss';
+                btn.innerHTML = '<i class="bi bi-x-lg"></i>';
+                tr.children[4].appendChild(btn);
+            } else {
+                errDiv.remove();
+            }
+            tr.children[2].textContent = (started != null && finished != null)
+                ? humanizeDuration(finished - started) : '—';
+            tr.children[3].textContent = task.completedAt
+                ? new Date(task.completedAt).toLocaleString() : '';
+            tbody.appendChild(tr);
+        });
+    }
+
     function renderWorkers() {
         const container = document.getElementById('workerCards');
         container.innerHTML = '';
@@ -485,9 +563,7 @@
             t => t.status !== 'failed' && !t.runAfter));
         section('scheduledTasks', 'scheduledEmpty', roots.filter(
             t => t.status === 'pending' && t.runAfter));
-        const failed = roots.filter(t => t.status === 'failed');
-        section('failedTasks', 'failedEmpty', failed);
-        document.getElementById('purgeFailed').classList.toggle('d-none', !failed.length);
+        renderFailedTable();
 
         // A full window means the server had more rows to give. Counting what arrived
         // avoids asking it for a total nothing else needs.
@@ -569,6 +645,14 @@
     });
 
     live.start();
+
+    // Failed-table dismiss buttons are rebuilt on every render, so the listener
+    // lives on the table body rather than on any button.
+    document.getElementById('failedBody').addEventListener('click', e => {
+        const btn = e.target.closest('.failed-dismiss');
+        if (!btn || btn.disabled) return;
+        dismissTask(Number(btn.dataset.id));
+    });
 
     // Elapsed times and countdowns move on their own, without a server event — but only
     // while connected, since nothing on a frozen page changes between ticks.
