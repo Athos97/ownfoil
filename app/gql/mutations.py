@@ -379,12 +379,13 @@ class Mutation:
     ) -> Optional[Download]:
         """Re-run a failed download from scratch through its own source: a torrents
         row is re-searched on Jackett and handed to qBittorrent, a Ghost eShop row
-        is downloaded again (resuming any partial file). The old row keeps its place
-        - one row per (app id, version) target. Null when the row vanished
-        mid-retry."""
-        import downloader as downloader_lib
+        goes back to queued and downloads as its own task (never inside this
+        request). The old row keeps its place - one row per (app id, version)
+        target. Null when the row vanished mid-retry."""
+        import tasks as tasks_mod
         from db import get_download_by_app, get_download_by_id
         from settings import get_settings
+        import downloader as downloader_lib
         _require_admin(info.context)
         download = get_download_by_id(int(id))
         if not download:

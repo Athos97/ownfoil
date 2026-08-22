@@ -8,8 +8,10 @@ as long as the already-downloaded leading chunks still match by URL and size.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Optional
@@ -22,6 +24,25 @@ CHUNK_SIZE = 256 * 1024
 RETRY_BACKOFF = (0.5, 1.5, 3.0)
 RETRY_STATUS = {408, 425, 429, 500, 502, 503, 504}
 CHUNK_ATTEMPTS = 4
+
+# Head-room beyond the file size, so a nearly-full volume does not fail on the
+# last block of metadata (state file, final rename).
+DISK_HEADROOM = 64 * 1024 * 1024
+
+
+class DiskFullError(GhostshopError):
+    """No space for this file - not transient, retrying will not help."""
+
+
+def _check_disk_space(destination: Path, needed: int):
+    try:
+        free = shutil.disk_usage(destination.parent).free
+    except OSError:
+        return  # cannot tell: proceed and let the write surface any problem
+    if needed and free < needed + DISK_HEADROOM:
+        raise DiskFullError(
+            f'not enough disk space for {destination.name}: '
+            f'{free // (1024 * 1024)} MiB free, {needed // (1024 * 1024)} MiB needed')
 
 
 def _http_get_stream(session: requests.Session, url: str,
@@ -69,7 +90,11 @@ def _download_chunk_to(session, url, fh, offset, headers, on_progress) -> int:
             if got:
                 return got
             raise GhostshopError('empty chunk')
+        except DiskFullError:
+            raise  # ENOSPC never resolves by retrying
         except (GhostshopError, requests.RequestException, OSError) as exc:
+            if getattr(exc, 'errno', None) == errno.ENOSPC:
+                raise DiskFullError(f'no space left while downloading: {exc}') from exc
             last_error = exc
             if attempt < CHUNK_ATTEMPTS - 1:
                 time.sleep(RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF) - 1)])
@@ -100,6 +125,9 @@ def download_chunked(session: requests.Session, plan, destination: Path,
 
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    # Before touching disk: a multi-GB .part on a nearly-full volume helps
+    # nobody - fail fast with an actionable error instead.
+    _check_disk_space(destination, total)
     partial_file = destination.with_name(destination.name + '.part')
     state_file = destination.with_name(destination.name + '.part.state')
 

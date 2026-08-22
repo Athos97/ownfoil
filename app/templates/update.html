@@ -174,7 +174,7 @@
 
     function typeBadge(t) {
         const map = {UPDATE: 'text-bg-primary', DLC: 'text-bg-secondary', BASE: 'text-bg-success'};
-        return `<span class="badge ${map[t] || 'text-bg-secondary'}">${t}</span>`;
+        return `<span class="badge ${map[t] || 'text-bg-secondary'}">${esc(t)}</span>`;
     }
 
     function renderTargets(targets) {
@@ -239,7 +239,17 @@
         });
     }
 
+    let statusDebounce = null;
+
+    function loadAllSoon() {
+        // A finished pass fires one completion event per file; refetching the
+        // work list per event turns a big pass into a query stampede. Coalesce.
+        clearTimeout(statusDebounce);
+        statusDebounce = setTimeout(loadAll, 2500);
+    }
+
     async function loadAll() {
+        clearTimeout(statusDebounce);
         try {
             const data = await gql(STATUS_QUERY);
             renderStatus(data.downloaderStatus || []);
@@ -263,7 +273,7 @@
         scheduleFlightRender();
         // Rows complete/appear as jobs run; refresh the cards and work list lazily.
         if (type !== 'update' || data.status === 'completed' || data.status === 'failed') {
-            loadAll();
+            loadAllSoon();
         }
     });
     live.start();

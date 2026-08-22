@@ -10,8 +10,10 @@
                 library has identified the file.</p>
         </div>
         <div class="ms-auto">
-            <button type="button" id="runDownloaderBtn" class="btn btn-primary"
-                onClick="runDownloaderNow()">Run scan now</button>
+            <button type="button" id="runTorrentsBtn" class="btn btn-primary"
+                onClick="runDownloaderNow('TORRENTS')">Run torrents now</button>
+            <button type="button" id="runGhostBtn" class="btn btn-primary"
+                onClick="runDownloaderNow('GHOSTESHOP')">Run Ghost eShop now</button>
         </div>
     </div>
 
@@ -58,9 +60,21 @@
         }`;
 
     const RUN_MUTATION = `
-        mutation Run {
-            runDownloader(source: TORRENTS) { id status }
+        mutation Run($source: DownloadSource!) {
+            runDownloader(source: $source) { id status }
         }`;
+
+    async function runDownloaderNow(source) {
+        const btn = source === 'TORRENTS' ? $('#runTorrentsBtn') : $('#runGhostBtn');
+        btn.prop('disabled', true);
+        try {
+            await mutate(RUN_MUTATION, {source: source});
+        } catch (e) {
+            console.error(e);
+        } finally {
+            btn.prop('disabled', false);
+        }
+    }
 
     let downloads = {};   // id -> download
     let renderQueued = false;
@@ -103,20 +117,9 @@
                 delete downloads[String(id)];
                 scheduleRender();
             }
-        } catch (e) {
+         } catch (e) {
             console.error(e);
             $(`.dl-delete[data-id="${id}"]`).prop('disabled', false);
-        }
-    }
-
-    async function runDownloaderNow() {
-        $('#runDownloaderBtn').prop('disabled', true);
-        try {
-            await mutate(RUN_MUTATION);
-        } catch (e) {
-            console.error(e);
-        } finally {
-            $('#runDownloaderBtn').prop('disabled', false);
         }
     }
 

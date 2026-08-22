@@ -231,7 +231,7 @@
 
     function typeBadge(t) {
         const map = {BASE: 'text-bg-success', UPDATE: 'text-bg-primary', DLC: 'text-bg-secondary'};
-        return `<span class="badge ${map[t] || 'text-bg-secondary'}">${t}</span>`;
+        return `<span class="badge ${map[t] || 'text-bg-secondary'}">${esc(t)}</span>`;
     }
 
     function versionLabel(e) {

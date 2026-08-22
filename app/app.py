@@ -1,5 +1,6 @@
 import datetime
 import re
+import shutil
 from flask import Flask, render_template, request, redirect, url_for, jsonify, send_from_directory, Response
 from flask_login import LoginManager
 from flask_sock import Sock
@@ -249,6 +250,19 @@ def index(path=None):
         return access_shop_auth()
     return access_shop()
 
+def _load_languages():
+    """titledb's language table, with a fallback for a first boot whose titledb
+    download has not succeeded yet (otherwise the Settings page 500s - the page
+    an admin needs precisely then)."""
+    import json as _json
+    path = os.path.join(TITLEDB_DIR, 'languages.json')
+    try:
+        with open(path) as f:
+            return dict(sorted(_json.load(f).items()))
+    except (OSError, ValueError):
+        return {'EN': {'en': 'English'}}
+
+
 @app.route('/admin')
 @access_required('admin')
 def admin_page():
@@ -257,9 +271,7 @@ def admin_page():
 @app.route('/admin/settings')
 @access_required('admin')
 def settings_page():
-    with open(os.path.join(TITLEDB_DIR, 'languages.json')) as f:
-        languages = json.load(f)
-        languages = dict(sorted(languages.items()))
+    languages = _load_languages()
     return render_template(
         'settings.html',
         title='Settings',
@@ -402,9 +414,7 @@ def set_titles_settings_api():
     title_settings = request.json
     region = title_settings['region']
     language = title_settings['language']
-    with open(os.path.join(TITLEDB_DIR, 'languages.json')) as f:
-        languages = json.load(f)
-        languages = dict(sorted(languages.items()))
+    languages = _load_languages()
 
     if region not in languages or language not in languages[region]:
         resp = {
@@ -614,20 +624,32 @@ def upload_file():
     try:
         file = request.files['file']
         if file and allowed_file(file.filename):
-            # filename = secure_filename(file.filename)
+            # Keep the previous keys recoverable: an invalid upload must not
+            # leave the instance keyless (the old code deleted whatever landed).
+            backup = None
+            if os.path.exists(KEYS_FILE):
+                backup = KEYS_FILE + '.bak'
+                shutil.copy2(KEYS_FILE, backup)
             file.save(KEYS_FILE)
             logger.info(f'Validating {file.filename}...')
             valid_keys, missing_keys, corrupt_keys = load_keys(KEYS_FILE)
             if valid_keys:
                 tasks_mod.enqueue_task('process_library')
+                if backup:
+                    os.remove(backup)
+                logger.info('Successfully saved keys.txt')
             else:
                 logger.warning(f'Invalid keys from {file.filename}')
+                if backup and os.path.exists(backup):
+                    shutil.move(backup, KEYS_FILE)  # restore the working set
             success = True
-            logger.info('Successfully saved keys.txt')
 
     except Exception as e:
         logger.error(f'Failed to upload console keys file: {e}')
-        os.remove(KEYS_FILE)
+        try:
+            os.remove(KEYS_FILE)
+        except OSError:
+            pass
         success = False
         errors.append(str(e))
 
