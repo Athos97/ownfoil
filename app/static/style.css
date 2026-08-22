@@ -289,10 +289,44 @@ p.game-description {
     padding-right: .75rem;
 }
 
+/* One header shape for every admin page: title and controls on one row (controls
+   centered against the title block, wrapping when the panel is too narrow), the
+   descriptive paragraph underneath spanning the full width. */
+.page-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .75rem;
+    margin-bottom: 1rem;
+}
+
+.page-head h2 {
+    margin-bottom: 0;
+}
+
+.page-head .page-head-controls {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .5rem;
+}
+
+.page-head + .page-head-sub {
+    margin-top: -.5rem;
+    margin-bottom: 1rem;
+}
+
 /* Too slim for a label, so the percentage is shown in the row's meta text instead. */
 .task-progress {
     height: .8rem;
     margin-top: .25rem;
+}
+
+/* Row lists rendered straight inside a card (game detail sections): the last
+   row's separator would double up with the card's own border. */
+.card-body.p-0 .border-bottom:last-child {
+    border-bottom: 0;
 }
 
 /* The bar is driven by percentages arriving a few times a second; easing the width
@@ -365,6 +399,28 @@ p.game-description {
    wrapping keeps the figures beside it rather than pushed out of the column. */
 .stat-table td:first-child {
     overflow-wrap: anywhere;
+}
+
+/* Detail tables (long file names, sentence-length errors) want the whole panel
+   width and left-aligned text columns; only real figures align right. */
+.stat-section-wide {
+    grid-column: 1 / -1;
+}
+
+.stat-table-wide {
+    max-width: none;
+}
+
+.stat-table-wide th:not(:first-child),
+.stat-table-wide td:not(:first-child) {
+    text-align: left;
+    white-space: normal;
+}
+
+.stat-table-wide td.fig,
+.stat-table-wide th.fig {
+    text-align: right;
+    white-space: nowrap;
 }
 
 /* The library grid's one-line summary above the cards. */

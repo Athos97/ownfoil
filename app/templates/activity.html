@@ -2,13 +2,9 @@
 {% block panel %}
 <div class="settings-container container mt-3">
 
-    <div class="d-flex align-items-start">
-        <div>
-            <h2>Activity</h2>
-            <p class="text-secondary">Who connects, who downloads what, and web logins -
-                the newest {{ max_events }} events, live.</p>
-        </div>
-        <div class="ms-auto d-flex gap-2 align-items-center">
+    <div class="page-head">
+        <h2>Activity</h2>
+        <div class="page-head-controls">
             <select id="kindFilter" class="form-select form-select-sm" style="width: auto;">
                 <option value="">All events</option>
                 <option value="shop_connect">Shop connections</option>
@@ -18,9 +14,11 @@
             </select>
             <span id="liveDot" class="badge text-bg-success">live</span>
         </div>
+        <p class="text-secondary mb-0 w-100">Who connects, who downloads what, and web
+            logins - the newest {{ max_events }} events, live.</p>
     </div>
 
-    <div class="table-responsive">
+    <div id="activityTable" class="table-responsive">
         <table class="table table-sm table-hover align-middle">
             <thead>
                 <tr>
@@ -107,6 +105,7 @@
             .filter(e => !filter || e.kind === filter)
             .sort((a, b) => b.id - a.id);
         document.getElementById('activityEmpty').classList.toggle('d-none', list.length > 0);
+        document.getElementById('activityTable').classList.toggle('d-none', list.length === 0);
         tbody.innerHTML = '';
         list.forEach(e => {
             const tr = document.createElement('tr');

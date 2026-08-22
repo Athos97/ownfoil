@@ -2,14 +2,9 @@
 {% block panel %}
 <div class="settings-container container mt-3">
 
-    <div class="d-flex align-items-start">
-        <div>
-            <h2>Downloads</h2>
-            <p class="text-secondary">Content the downloader is fetching - torrents via
-                qBittorrent, direct transfers from Ghost eShop. A row completes when the
-                library has identified the file.</p>
-        </div>
-        <div class="ms-auto d-flex gap-2">
+    <div class="page-head">
+        <h2>Downloads</h2>
+        <div class="page-head-controls">
             <button type="button" id="stopDownloadsBtn" class="btn btn-danger"
                 onClick="stopAllDownloads()">Stop &amp; delete all</button>
             <button type="button" id="runTorrentsBtn" class="btn btn-primary"
@@ -17,11 +12,14 @@
             <button type="button" id="runGhostBtn" class="btn btn-primary"
                 onClick="runDownloaderNow('GHOSTESHOP')">Run Ghost eShop now</button>
         </div>
+        <p class="text-secondary mb-0 w-100">Content the downloader is fetching - torrents
+            via qBittorrent, direct transfers from Ghost eShop. A row completes when the
+            library has identified the file.</p>
     </div>
 
     <div id="downloadsSummary" class="mb-3"></div>
 
-    <div class="table-responsive">
+    <div id="downloadsTable" class="table-responsive">
         <table class="table table-hover align-middle">
             <thead>
                 <tr>
@@ -249,6 +247,7 @@
         });
 
         document.getElementById('emptyState').classList.toggle('d-none', list.length > 0);
+        document.getElementById('downloadsTable').classList.toggle('d-none', list.length === 0);
 
         const counts = {};
         list.forEach(d => { counts[d.status] = (counts[d.status] || 0) + 1; });

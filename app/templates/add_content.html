@@ -2,13 +2,11 @@
 {% block panel %}
 <div class="settings-container container mt-3">
 
-    <div class="d-flex align-items-start">
-        <div>
-            <h2>Add Content</h2>
-            <p class="text-secondary">Bring new games into the library. Ghost eShop offers the
-                structured catalog (base, updates, DLCs, sizes); the torrents lane searches
-                trackers through Jackett and hands the pick to qBittorrent.</p>
-        </div>
+    <div class="page-head">
+        <h2>Add Content</h2>
+        <p class="text-secondary mb-0 w-100">Bring new games into the library. Ghost eShop
+            offers the structured catalog (base, updates, DLCs, sizes); the torrents lane
+            searches trackers through Jackett and hands the pick to qBittorrent.</p>
     </div>
 
     <ul class="nav nav-tabs mb-3" role="tablist">
@@ -268,8 +266,8 @@
         pane.innerHTML = `
             <div class="card">
                 <div class="card-body">
-                    <div class="d-flex align-items-start mb-3">
-                        <h5 class="card-title mb-0"></h5>
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+                        <h5 class="card-title mb-0 me-2"></h5>
                         <div class="ms-auto">
                             <button class="btn btn-primary btn-sm" id="queueSelectedBtn"
                                 type="button" onClick="queueSelected()">Queue selected</button>

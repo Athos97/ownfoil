@@ -2,14 +2,17 @@
 {% block panel %}
 <div class="settings-container container mt-3">
 
-    <div class="task-section-head">
-        <h2 class="mb-0">Stats</h2>
-        <button type="button" id="refreshStats" class="icon-btn ms-auto" onClick="loadStats()"
-                title="Refresh">
-            <i class="bi bi-arrow-clockwise"></i>
-        </button>
+    <div class="page-head">
+        <h2>Stats</h2>
+        <div class="page-head-controls">
+            <button type="button" id="refreshStats" class="icon-btn" onClick="loadStats()"
+                    title="Refresh">
+                <i class="bi bi-arrow-clockwise"></i>
+            </button>
+        </div>
+        <p class="text-secondary mb-0 w-100">Library-wide figures, counted at the moment the
+            page loaded.</p>
     </div>
-    <p class="text-secondary">Library-wide figures, counted at the moment the page loaded.</p>
 
     <div id="statTiles" class="stat-grid"></div>
 
@@ -46,13 +49,19 @@
             </table>
         </section>
 
-        <section>
+        <section class="stat-section-wide">
             <h4 class="mb-3">Unidentified files</h4>
             <p class="text-secondary small">Files ownfoil could not match to any title,
                 with the error that last failed them - typically truncated downloads or a
                 keys file missing the title's master key.</p>
-            <table class="table table-sm stat-table">
-                <thead><tr><th>File</th><th>Error</th><th>Attempts</th><th>Size</th><th>Last attempt</th></tr></thead>
+            <table class="table table-sm stat-table stat-table-wide">
+                <thead><tr>
+                    <th>File</th>
+                    <th>Error</th>
+                    <th class="fig">Attempts</th>
+                    <th class="fig">Size</th>
+                    <th class="fig">Last attempt</th>
+                </tr></thead>
                 <tbody id="unidentifiedFiles"></tbody>
             </table>
         </section>

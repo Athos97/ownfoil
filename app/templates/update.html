@@ -2,25 +2,23 @@
 {% block panel %}
 <div class="settings-container container mt-3">
 
-    <div class="d-flex align-items-start">
-        <div>
-            <h2>Update Library</h2>
-            <p class="text-secondary">Missing updates and DLCs across your library, with the
-                source that will fetch them. A manual run uses the same work list as the
-                periodic schedule.</p>
-        </div>
-        <div class="ms-auto">
+    <div class="page-head">
+        <h2>Update Library</h2>
+        <div class="page-head-controls">
             <button type="button" id="refreshTargets" class="icon-btn" onClick="loadAll()"
                     title="Refresh">
                 <i class="bi bi-arrow-clockwise"></i>
             </button>
         </div>
+        <p class="text-secondary mb-0 w-100">Missing updates and DLCs across your library,
+            with the source that will fetch them. A manual run uses the same work list as
+            the periodic schedule.</p>
     </div>
 
     <div class="row g-3 mb-3" id="sourceCards"></div>
 
     <h4 class="mb-3">Missing content <span class="text-secondary fw-normal small" id="targetsCount"></span></h4>
-    <div class="table-responsive">
+    <div id="targetsTable" class="table-responsive">
         <table class="table table-sm table-hover align-middle">
             <thead>
                 <tr>
@@ -147,7 +145,7 @@
             : 'no run scheduled';
         const button = s.source;  // enum name doubles as the DOM id suffix
         return `
-        <div class="col-md-6">
+        <div class="col-12 col-lg-6">
             <div class="card h-100">
                 <div class="card-body">
                     <div class="d-flex align-items-center mb-2">
@@ -181,6 +179,7 @@
         const tbody = document.getElementById('targetsBody');
         tbody.innerHTML = '';
         document.getElementById('targetsEmpty').classList.toggle('d-none', targets.length > 0);
+        document.getElementById('targetsTable').classList.toggle('d-none', targets.length === 0);
         document.getElementById('targetsCount').textContent =
             targets.length ? `(${targets.length})` : '';
         targets.forEach(t => {
