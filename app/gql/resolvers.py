@@ -1120,7 +1120,8 @@ def resolve_stats(*, ctx: GraphQLContext, info) -> LibraryStats:
 
     if any(sel.has(f) for f in ("totalApps", "ownedApps")):
         r = db.session.execute(text(
-            "SELECT COUNT(*), COALESCE(SUM(owned), 0) FROM apps")).first()
+            "SELECT COUNT(*), COALESCE(SUM(owned), 0) FROM apps "
+            "WHERE app_id NOT IN (SELECT app_id FROM app_blacklist)")).first()
         stats.total_apps, stats.owned_apps = int(r[0]), int(r[1])
 
     if ctx.can_admin and sel.has("filesByExtension"):
@@ -1131,10 +1132,12 @@ def resolve_stats(*, ctx: GraphQLContext, info) -> LibraryStats:
     if sel.has("appsByType"):
         # Apps are metadata rows, so there are no bytes to report - what a bucket can
         # say instead is how much of it the library actually holds.
+        # Blacklisted apps are excluded so they don't inflate "missing" counts.
         stats.apps_by_type = [
             AppTypeCount(key=str(r[0]), count=int(r[1]), owned=int(r[2]))
             for r in db.session.execute(text(
                 "SELECT app_type, COUNT(*), COALESCE(SUM(owned), 0) FROM apps "
+                "WHERE app_id NOT IN (SELECT app_id FROM app_blacklist) "
                 "GROUP BY app_type ORDER BY app_type")).all()]
 
     if ctx.can_admin and sel.has("filesByLibrary"):
