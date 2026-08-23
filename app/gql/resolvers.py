@@ -90,6 +90,7 @@ def _title_cols(driver: str, sel: "Selection") -> str:
         cols.append("ot.have_base AS have_base")
         cols.append("ot.up_to_date AS up_to_date")
         cols.append("ot.complete AS complete")
+        cols.append("ot.dlcs_up_to_date AS dlcs_up_to_date")
     return ", ".join(cols)
 
 _FILE_COLS = """
@@ -169,6 +170,7 @@ def _build_title(row, *, with_apps: bool, with_files: bool) -> Title:
             have_base=bool(m.get('have_base')),
             up_to_date=bool(m.get('up_to_date')),
             complete=bool(m.get('complete')),
+            dlcs_up_to_date=bool(m.get('dlcs_up_to_date', True)),
         )
     return Title(
         title_id=strawberry.ID((m.get('title_id') or "").upper()),

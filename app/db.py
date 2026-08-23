@@ -195,6 +195,7 @@ class Titles(db.Model):
     have_base = db.Column(db.Boolean, default=False)
     up_to_date = db.Column(db.Boolean, default=False)
     complete = db.Column(db.Boolean, default=False)
+    dlcs_up_to_date = db.Column(db.Boolean, default=True)
 
 
 class BlacklistedApp(db.Model):

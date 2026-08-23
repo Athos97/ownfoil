@@ -368,13 +368,30 @@ def update_title_flags(title_id):
         dlc_by_id = {}
         for dlc_app_id, version_str, owned in cursor.fetchall():
             version = int(version_str)
-            if dlc_app_id not in dlc_by_id or version > dlc_by_id[dlc_app_id]['version']:
-                dlc_by_id[dlc_app_id] = {'version': version, 'owned': bool(owned)}
+            prev = dlc_by_id.get(dlc_app_id)
+            if not prev:
+                dlc_by_id[dlc_app_id] = {
+                    'owned_version': version if owned else -1,
+                    'latest_version': version,
+                    'owned': bool(owned),
+                }
+            else:
+                if owned and version > prev['owned_version']:
+                    prev['owned_version'] = version
+                    prev['owned'] = True
+                if version > prev['latest_version']:
+                    prev['latest_version'] = version
         complete = all(d['owned'] for d in dlc_by_id.values()) if dlc_by_id else True
+        owned_dlcs = [d for d in dlc_by_id.values() if d['owned']]
+        dlcs_up_to_date = all(
+            d['owned_version'] >= d['latest_version'] for d in owned_dlcs
+        ) if owned_dlcs else True
 
         cursor.execute(
-            "UPDATE titles SET have_base = ?, up_to_date = ?, complete = ? WHERE id = ?",
-            (int(have_base), int(up_to_date), int(complete), title_db_id)
+            "UPDATE titles SET have_base = ?, up_to_date = ?, complete = ?, "
+            "dlcs_up_to_date = ? WHERE id = ?",
+            (int(have_base), int(up_to_date), int(complete),
+             int(dlcs_up_to_date), title_db_id)
         )
         connection.commit()
     except Exception:

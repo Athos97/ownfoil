@@ -56,6 +56,7 @@ class Ownership:
     up_to_date: bool = desc("No newer UPDATE version is known than the highest one "
                             "owned. False also when nothing is owned at all.")
     complete: bool = desc("Every DLC titledb attributes to this title is owned.")
+    dlcs_up_to_date: bool = desc("Every owned DLC is at its latest known version.")
 
 
 @described(strawberry.type)

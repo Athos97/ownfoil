@@ -162,7 +162,7 @@
                     titleId
                     name
                     bannerUrl
-                    ownership { haveBase upToDate complete }
+                    ownership { haveBase upToDate complete dlcsUpToDate }
                 }
             }
         }`;
@@ -278,7 +278,7 @@
      * blacklist-aware on the server side.
      */
     function cardModel(title) {
-        const ownership = title.ownership || {haveBase: false, upToDate: false, complete: false};
+        const ownership = title.ownership || {haveBase: false, upToDate: false, complete: false, dlcsUpToDate: true};
         const name = title.name || 'Unrecognized';
         return {
             title_id: title.titleId,
@@ -287,6 +287,7 @@
             owned: ownership.haveBase,
             has_latest_version: ownership.haveBase && ownership.upToDate,
             has_all_dlcs: ownership.complete,
+            dlcs_up_to_date: ownership.dlcsUpToDate,
             dl_key: title.titleId,
         };
     }
@@ -333,13 +334,17 @@
             }
 
             if (game.has_all_dlcs !== undefined) {
+                const dlcOk = game.has_all_dlcs && game.dlcs_up_to_date;
+                const dlcTips = [];
+                if (!game.has_all_dlcs) dlcTips.push('Missing DLCs');
+                if (!game.dlcs_up_to_date) dlcTips.push('Outdated DLCs');
                 const dlcBadge = $('<span class="badge rounded-pill game-tag" title="DLC set"></span>')
-                    .addClass(`text-bg-${game.has_all_dlcs ? 'success' : 'warning'}`)
+                    .addClass(`text-bg-${dlcOk ? 'success' : 'warning'}`)
                     .html('<i class="bi bi-box-seam-fill"></i>');
                 dlcBadge.attr("data-bs-toggle", "tooltip")
                 dlcBadge.attr("data-bs-placement", "top")
                 dlcBadge.attr("data-bs-title",
-                    game.has_all_dlcs ? "All DLCs owned" : "Missing DLCs")
+                    dlcOk ? "All DLCs owned" : dlcTips.join(' · '))
                 tagsContainer.append(dlcBadge);
             }
 
