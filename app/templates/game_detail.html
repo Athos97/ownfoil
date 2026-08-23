@@ -89,11 +89,62 @@
         return `<div class="d-flex align-items-center px-3 py-2 border-bottom">${inner}</div>`;
     }
 
+    // --- DLC summary (shared by header badges and DLC list) ---
+
+    function buildDlcMap(t) {
+        const byId = new Map();
+        for (const a of (t.apps || []).filter(a => a.appType === 'DLC')) {
+            const ver = parseInt(a.appVersion) || 0;
+            const prev = byId.get(a.appId);
+            if (!prev) {
+                byId.set(a.appId, {
+                    appId: a.appId,
+                    name: (a.titledb && a.titledb.name) || a.appId,
+                    iconUrl: a.titledb && a.titledb.iconUrl,
+                    owned: a.owned,
+                    ownedVersion: a.owned ? ver : -1,
+                    latestVersion: ver,
+                    blacklisted: a.blacklisted,
+                    files: a.files || [],
+                });
+            } else {
+                if (a.owned) prev.owned = true;
+                if (a.owned && ver > prev.ownedVersion) prev.ownedVersion = ver;
+                if (ver > prev.latestVersion) prev.latestVersion = ver;
+                if (a.files) prev.files = prev.files.concat(a.files);
+            }
+        }
+        for (const d of (t.availableDlc || [])) {
+            const ver = parseInt(d.version) || 0;
+            const prev = byId.get(d.appId);
+            if (!prev) {
+                byId.set(d.appId, {
+                    appId: d.appId,
+                    name: (d.titledb && d.titledb.name) || d.appId,
+                    iconUrl: d.titledb && d.titledb.iconUrl,
+                    owned: false,
+                    ownedVersion: -1,
+                    latestVersion: ver,
+                    blacklisted: d.blacklisted,
+                    files: [],
+                });
+            } else {
+                if (ver > prev.latestVersion) prev.latestVersion = ver;
+            }
+        }
+        return byId;
+    }
+
     // --- header ---
 
-    function renderHeader(t) {
+    function renderHeader(t, dlcMap) {
         const ownership = t.ownership || {};
         const name = t.name || 'Unrecognized';
+        // Compute DLC ownership and update status from deduplicated data,
+        // excluding blacklisted entries.
+        const activeDlcs = [...dlcMap.values()].filter(d => !d.blacklisted);
+        const allDlcsOwned = activeDlcs.length === 0 || activeDlcs.every(d => d.owned);
+        const dlcsUpToDate = activeDlcs.filter(d => d.owned).every(d => d.ownedVersion >= d.latestVersion);
         const html = `
             <div class="col-md-4">
                 <div class="card text-bg-dark">
@@ -114,7 +165,8 @@
                 <div class="d-flex gap-2 flex-wrap">
                     ${statusBadge(ownership.haveBase, 'Base game owned', 'Base missing')}
                     ${statusBadge(ownership.upToDate, 'Up to date', 'Update available')}
-                    ${statusBadge(ownership.complete, 'All DLCs owned', 'DLCs missing')}
+                    ${statusBadge(allDlcsOwned, 'All DLCs owned', 'DLCs missing')}
+                    ${activeDlcs.some(d => d.owned) ? statusBadge(dlcsUpToDate, 'DLCs up to date', 'DLC update available') : ''}
                 </div>
             </div>`;
         document.getElementById('gameHeader').innerHTML = html;
@@ -166,52 +218,9 @@
             <div class="ms-auto ps-2">${statusBadge(u.owned, 'Owned', 'Missing')}</div>`)).join('');
     }
 
-    function renderDlcs(t) {
+    function renderDlcs(t, dlcMap) {
         const el = document.getElementById('dlcSection');
-        // Build a map keyed by appId, merging app rows + availableDlc.
-        // Multiple app rows for the same appId (different versions) are collapsed.
-        const byId = new Map();
-        for (const a of (t.apps || []).filter(a => a.appType === 'DLC')) {
-            const ver = parseInt(a.appVersion) || 0;
-            const prev = byId.get(a.appId);
-            if (!prev) {
-                byId.set(a.appId, {
-                    appId: a.appId,
-                    name: (a.titledb && a.titledb.name) || a.appId,
-                    iconUrl: a.titledb && a.titledb.iconUrl,
-                    owned: a.owned,
-                    ownedVersion: a.owned ? ver : -1,
-                    latestVersion: ver,
-                    blacklisted: a.blacklisted,
-                    files: a.files || [],
-                });
-            } else {
-                if (a.owned) prev.owned = true;
-                if (a.owned && ver > prev.ownedVersion) prev.ownedVersion = ver;
-                if (ver > prev.latestVersion) prev.latestVersion = ver;
-                if (a.files) prev.files = prev.files.concat(a.files);
-            }
-        }
-        // Merge titledb-known DLCs that have no app row, and update latestVersion.
-        for (const d of (t.availableDlc || [])) {
-            const ver = parseInt(d.version) || 0;
-            const prev = byId.get(d.appId);
-            if (!prev) {
-                byId.set(d.appId, {
-                    appId: d.appId,
-                    name: (d.titledb && d.titledb.name) || d.appId,
-                    iconUrl: d.titledb && d.titledb.iconUrl,
-                    owned: false,
-                    ownedVersion: -1,
-                    latestVersion: ver,
-                    blacklisted: d.blacklisted,
-                    files: [],
-                });
-            } else {
-                if (ver > prev.latestVersion) prev.latestVersion = ver;
-            }
-        }
-        const items = [...byId.values()];
+        const items = [...dlcMap.values()];
         if (!items.length) {
             el.innerHTML = row('<div class="text-secondary fst-italic">No DLCs known.</div>');
             return;
@@ -275,10 +284,11 @@
             return;
         }
         document.getElementById('gameEmpty').classList.add('d-none');
-        renderHeader(title);
+        const dlcMap = buildDlcMap(title);
+        renderHeader(title, dlcMap);
         renderBase(title);
         renderUpdates(title);
-        renderDlcs(title);
+        renderDlcs(title, dlcMap);
     }
 
     loadGame();
