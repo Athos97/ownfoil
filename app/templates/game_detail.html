@@ -168,39 +168,58 @@
 
     function renderDlcs(t) {
         const el = document.getElementById('dlcSection');
-        // Merge: owned/tracked DLC apps + titledb-known DLCs without an app row.
-        const seen = new Set();
-        const items = [];
+        // Build a map keyed by appId, merging app rows + availableDlc.
+        // Multiple app rows for the same appId (different versions) are collapsed.
+        const byId = new Map();
         for (const a of (t.apps || []).filter(a => a.appType === 'DLC')) {
-            seen.add(a.appId);
-            items.push({
-                appId: a.appId,
-                name: (a.titledb && a.titledb.name) || a.appId,
-                iconUrl: a.titledb && a.titledb.iconUrl,
-                owned: a.owned,
-                version: a.appVersion,
-                blacklisted: a.blacklisted,
-                files: a.files,
-            });
+            const ver = parseInt(a.appVersion) || 0;
+            const prev = byId.get(a.appId);
+            if (!prev) {
+                byId.set(a.appId, {
+                    appId: a.appId,
+                    name: (a.titledb && a.titledb.name) || a.appId,
+                    iconUrl: a.titledb && a.titledb.iconUrl,
+                    owned: a.owned,
+                    ownedVersion: a.owned ? ver : -1,
+                    latestVersion: ver,
+                    blacklisted: a.blacklisted,
+                    files: a.files || [],
+                });
+            } else {
+                if (a.owned) prev.owned = true;
+                if (a.owned && ver > prev.ownedVersion) prev.ownedVersion = ver;
+                if (ver > prev.latestVersion) prev.latestVersion = ver;
+                if (a.files) prev.files = prev.files.concat(a.files);
+            }
         }
+        // Merge titledb-known DLCs that have no app row, and update latestVersion.
         for (const d of (t.availableDlc || [])) {
-            if (seen.has(d.appId)) continue;
-            items.push({
-                appId: d.appId,
-                name: (d.titledb && d.titledb.name) || d.appId,
-                iconUrl: d.titledb && d.titledb.iconUrl,
-                owned: false,
-                version: d.version || 0,
-                blacklisted: d.blacklisted,
-                files: [],
-            });
+            const ver = parseInt(d.version) || 0;
+            const prev = byId.get(d.appId);
+            if (!prev) {
+                byId.set(d.appId, {
+                    appId: d.appId,
+                    name: (d.titledb && d.titledb.name) || d.appId,
+                    iconUrl: d.titledb && d.titledb.iconUrl,
+                    owned: false,
+                    ownedVersion: -1,
+                    latestVersion: ver,
+                    blacklisted: d.blacklisted,
+                    files: [],
+                });
+            } else {
+                if (ver > prev.latestVersion) prev.latestVersion = ver;
+            }
         }
+        const items = [...byId.values()];
         if (!items.length) {
             el.innerHTML = row('<div class="text-secondary fst-italic">No DLCs known.</div>');
             return;
         }
         items.sort((a, b) => (a.owned === b.owned ? a.name.localeCompare(b.name) : (a.owned ? -1 : 1)));
-        el.innerHTML = items.map(d => row(`
+        el.innerHTML = items.map(d => {
+            const upToDate = d.owned && d.ownedVersion >= d.latestVersion;
+            return row(`
             <div class="flex-grow-1 d-flex align-items-center gap-2">
                 ${d.iconUrl ? `<img src="${esc(d.iconUrl)}" style="width: 2.2rem; height: 2.2rem;" class="rounded">` : ''}
                 <div>
@@ -214,12 +233,14 @@
                 ${d.blacklisted
                     ? '<span class="badge text-bg-dark" title="Excluded from missing content"><i class="bi bi-slash-circle"></i> blacklisted</span>'
                     : statusBadge(d.owned, 'Owned', 'Missing')}
+                ${d.owned && !d.blacklisted ? statusBadge(upToDate, 'Up to date', 'Update available') : ''}
                 ${IS_ADMIN ? `<button type="button" class="icon-btn dlc-bl"
                     data-id="${esc(d.appId)}" data-bl="${d.blacklisted ? '1' : ''}"
                     title="${d.blacklisted ? 'Take off the blacklist' : 'Blacklist: stop counting as missing'}">
                     <i class="bi ${d.blacklisted ? 'bi-slash-circle' : 'bi-slash-circle'}"></i>
                 </button>` : ''}
-            </div>`)).join('');
+            </div>`);
+        }).join('');
     }
 
     document.getElementById('dlcSection').addEventListener('click', async e => {
