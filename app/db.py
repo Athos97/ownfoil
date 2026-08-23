@@ -867,7 +867,7 @@ def increment_download_count(filepath):
 @throttle(60, key_func=lambda filepath, host: (filepath, host))
 def increment_download_count_throttled(filepath, host):
     """Throttled wrapper around increment_download_count per (filepath, host) pair."""
-    increment_download_count(filepath)
+    return increment_download_count(filepath)
 
 
 def reset_files_organized():
