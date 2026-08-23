@@ -17,15 +17,29 @@
                     <ul class="dropdown-menu">
                         <li>
                             <div class="dropdown-item">
-                                <div class="btn-group w-100" role="group" aria-label="Update filter">
-                                    <input type="radio" class="btn-check update-toggle" name="updateFilter" id="updateAll" autocomplete="off" checked>
-                                    <label class="btn btn-outline-primary" for="updateAll">All</label>
+                                <div class="btn-group w-100" role="group" aria-label="Filter">
+                                    <input type="radio" class="btn-check filter-toggle" name="mainFilter" id="filterAll" value="all" autocomplete="off" checked>
+                                    <label class="btn btn-outline-primary" for="filterAll">All</label>
 
-                                    <input type="radio" class="btn-check update-toggle" name="updateFilter" id="updateUpToDate" autocomplete="off">
-                                    <label class="btn btn-outline-primary" for="updateUpToDate">Up to date</label>
+                                    <input type="radio" class="btn-check filter-toggle" name="mainFilter" id="filterUpToDate" value="up_to_date" autocomplete="off">
+                                    <label class="btn btn-outline-primary" for="filterUpToDate">Up to date</label>
 
-                                    <input type="radio" class="btn-check update-toggle" name="updateFilter" id="updateMissingUpdate" autocomplete="off">
-                                    <label class="btn btn-outline-primary" for="updateMissingUpdate">Missing Update</label>
+                                    <input type="radio" class="btn-check filter-toggle" name="mainFilter" id="filterMissingUpdate" value="missing_update" autocomplete="off">
+                                    <label class="btn btn-outline-primary" for="filterMissingUpdate">Missing Update</label>
+                                </div>
+                            </div>
+                        </li>
+                        <li>
+                            <div class="dropdown-item">
+                                <div class="btn-group w-100" role="group" aria-label="DLC filter">
+                                    <input type="radio" class="btn-check filter-toggle" name="mainFilter" id="filterAllDlcs" value="all_dlcs" autocomplete="off">
+                                    <label class="btn btn-outline-primary" for="filterAllDlcs">All DLCs</label>
+
+                                    <input type="radio" class="btn-check filter-toggle" name="mainFilter" id="filterMissingDlcs" value="missing_dlcs" autocomplete="off">
+                                    <label class="btn btn-outline-primary" for="filterMissingDlcs">Missing DLCs</label>
+
+                                    <input type="radio" class="btn-check filter-toggle" name="mainFilter" id="filterOutdatedDlcs" value="outdated_dlcs" autocomplete="off">
+                                    <label class="btn btn-outline-primary" for="filterOutdatedDlcs">Outdated DLCs</label>
                                 </div>
                             </div>
                         </li>
@@ -34,15 +48,15 @@
                         </li>
                         <li>
                             <div class="dropdown-item">
-                                <div class="btn-group w-100" role="group" aria-label="Completion filter">
-                                    <input type="radio" class="btn-check completion-toggle" name="completionFilter" id="completionAll" autocomplete="off" checked>
-                                    <label class="btn btn-outline-primary" for="completionAll">All</label>
+                                <div class="btn-group w-100" role="group" aria-label="Sort">
+                                    <input type="radio" class="btn-check sort-toggle" name="sortOrder" id="sortNameAsc" value="name_asc" autocomplete="off" checked>
+                                    <label class="btn btn-outline-primary" for="sortNameAsc">Name (A-Z)</label>
 
-                                    <input type="radio" class="btn-check completion-toggle" name="completionFilter" id="completionComplete" autocomplete="off">
-                                    <label class="btn btn-outline-primary" for="completionComplete">Complete</label>
+                                    <input type="radio" class="btn-check sort-toggle" name="sortOrder" id="sortSizeAsc" value="size_asc" autocomplete="off">
+                                    <label class="btn btn-outline-primary" for="sortSizeAsc">Size ↑</label>
 
-                                    <input type="radio" class="btn-check completion-toggle" name="completionFilter" id="completionMissingDlc" autocomplete="off">
-                                    <label class="btn btn-outline-primary" for="completionMissingDlc">Missing DLC</label>
+                                    <input type="radio" class="btn-check sort-toggle" name="sortOrder" id="sortSizeDesc" value="size_desc" autocomplete="off">
+                                    <label class="btn btn-outline-primary" for="sortSizeDesc">Size ↓</label>
                                 </div>
                             </div>
                         </li>
@@ -118,9 +132,9 @@
     let fetchSeq = 0;    // guards against an older request answering after a newer one
     let searchDebounce;
 
-    // Active filters - per game: update currency and DLC completion.
-    let activeUpdateFilter = "";
-    let activeCompletionFilter = "";
+    // Active filter and sort selections.
+    let activeFilter = "all";
+    let activeSort = "name_asc";
 
     // Title/app ids with a download in flight, so cards can carry a live badge.
     // Only maintained (and only used) when the viewer is an admin.
@@ -154,15 +168,17 @@
     // The owned:true driver means every card has its base; haveBase is implied.
     const CARDS_QUERY = `
         query Cards($page: Int!, $pageSize: Int!, $search: String,
-                    $upToDate: Boolean, $complete: Boolean) {
-            titles(owned: true, orderBy: {field: NAME}, page: $page, pageSize: $pageSize,
-                   search: $search, filter: {upToDate: $upToDate, complete: $complete}) {
+                    $upToDate: Boolean, $complete: Boolean, $dlcsUpToDate: Boolean,
+                    $orderField: OrderField, $orderDir: OrderDirection) {
+            titles(owned: true, orderBy: {field: $orderField, direction: $orderDir},
+                   page: $page, pageSize: $pageSize, search: $search,
+                   filter: {upToDate: $upToDate, complete: $complete, dlcsUpToDate: $dlcsUpToDate}) {
                 total
                 items {
                     titleId
                     name
                     bannerUrl
-                    ownership { haveBase upToDate complete dlcsUpToDate }
+                    ownership { haveBase upToDate complete dlcsUpToDate ownedSize }
                 }
             }
         }`;
@@ -176,14 +192,34 @@
             }
         }`;
 
+    const FILTER_MAP = {
+        all:            {upToDate: null, complete: null, dlcsUpToDate: null},
+        up_to_date:     {upToDate: true, complete: null, dlcsUpToDate: null},
+        missing_update: {upToDate: false, complete: null, dlcsUpToDate: null},
+        all_dlcs:       {upToDate: null, complete: true, dlcsUpToDate: null},
+        missing_dlcs:   {upToDate: null, complete: false, dlcsUpToDate: null},
+        outdated_dlcs:  {upToDate: null, complete: null, dlcsUpToDate: false},
+    };
+
+    const SORT_MAP = {
+        name_asc:  {orderField: 'NAME', orderDir: 'ASC'},
+        size_asc:  {orderField: 'SIZE', orderDir: 'ASC'},
+        size_desc: {orderField: 'SIZE', orderDir: 'DESC'},
+    };
+
     function queryVariables() {
         const search = ($('#textFilter').val() || '').trim();
+        const f = FILTER_MAP[activeFilter] || FILTER_MAP.all;
+        const s = SORT_MAP[activeSort] || SORT_MAP.name_asc;
         return {
             page: currentPage,
             pageSize: itemsPerPage,
             search: search || null,
-            upToDate: activeUpdateFilter ? activeUpdateFilter === 'Up to date' : null,
-            complete: activeCompletionFilter ? activeCompletionFilter === 'Complete' : null,
+            upToDate: f.upToDate,
+            complete: f.complete,
+            dlcsUpToDate: f.dlcsUpToDate,
+            orderField: s.orderField,
+            orderDir: s.orderDir,
         };
     }
 
@@ -278,7 +314,7 @@
      * blacklist-aware on the server side.
      */
     function cardModel(title) {
-        const ownership = title.ownership || {haveBase: false, upToDate: false, complete: false, dlcsUpToDate: true};
+        const ownership = title.ownership || {haveBase: false, upToDate: false, complete: false, dlcsUpToDate: true, ownedSize: 0};
         const name = title.name || 'Unrecognized';
         return {
             title_id: title.titleId,
@@ -288,6 +324,7 @@
             has_latest_version: ownership.haveBase && ownership.upToDate,
             has_all_dlcs: ownership.complete,
             dlcs_up_to_date: ownership.dlcsUpToDate,
+            owned_size: ownership.ownedSize || 0,
             dl_key: title.titleId,
         };
     }
@@ -311,7 +348,10 @@
             cardOverlay.append(title);
 
             const description = $('<p class="card-text game-description"></p>');
-            const small = $('<small></small>').text(game.title_id);
+            const descText = game.owned_size
+                ? `${game.title_id}  ·  ${formatBytes(game.owned_size)}`
+                : game.title_id;
+            const small = $('<small></small>').text(descText);
             description.append(small);
             cardOverlay.append(description);
 
@@ -478,8 +518,8 @@
 
     function saveFiltersToStorage() {
         localStorage.setItem('activeFilters', JSON.stringify({
-            update: activeUpdateFilter,
-            completion: activeCompletionFilter,
+            filter: activeFilter,
+            sort: activeSort,
         }));
     }
 
@@ -488,13 +528,14 @@
         if (savedFilters) {
             const filters = JSON.parse(savedFilters);
 
-            $('#updateUpToDate').prop('checked', filters.update === 'Up to date');
-            $('#updateMissingUpdate').prop('checked', filters.update === 'Outdated');
-
-            $('#completionComplete').prop('checked', filters.completion === 'Complete');
-            $('#completionMissingDlc').prop('checked', filters.completion === 'Missing DLC');
-
-            updateFilter();
+            if (filters.filter && FILTER_MAP[filters.filter]) {
+                activeFilter = filters.filter;
+                $(`.filter-toggle[value="${activeFilter}"]`).prop('checked', true);
+            }
+            if (filters.sort && SORT_MAP[filters.sort]) {
+                activeSort = filters.sort;
+                $(`.sort-toggle[value="${activeSort}"]`).prop('checked', true);
+            }
         }
 
         const savedSearch = localStorage.getItem('searchTerm');
@@ -503,22 +544,10 @@
         }
     }
 
-    /** Read the filter controls into the active* variables the query is built from. */
+    /** Read the filter/sort controls into the active variables the query is built from. */
     function updateFilter() {
-        if ($('#updateUpToDate').is(":checked")) {
-            activeUpdateFilter = 'Up to date';
-        } else if ($('#updateMissingUpdate').is(":checked")) {
-            activeUpdateFilter = 'Outdated';
-        } else {
-            activeUpdateFilter = '';
-        }
-        if ($('#completionComplete').is(":checked")) {
-            activeCompletionFilter = 'Complete';
-        } else if ($('#completionMissingDlc').is(":checked")) {
-            activeCompletionFilter = 'Missing DLC';
-        } else {
-            activeCompletionFilter = '';
-        }
+        activeFilter = $('input.filter-toggle:checked').val() || 'all';
+        activeSort = $('input.sort-toggle:checked').val() || 'name_asc';
     }
 
     function onFilterChange() {
@@ -587,7 +616,7 @@
             resetToFirstPage();
         });
 
-        $('.update-toggle, .completion-toggle').change(onFilterChange);
+        $('.filter-toggle, .sort-toggle').change(onFilterChange);
 
         // Listen to input changes in the text filter input
         $("#textFilter").on("input", function () {

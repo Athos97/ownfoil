@@ -108,6 +108,9 @@ class TitleFilter:
     complete: Optional[bool] = desc(
         "Whether every known DLC is owned. Unowned titles count as false.",
         default=None)
+    dlcs_up_to_date: Optional[bool] = desc(
+        "Whether every owned DLC is at its latest known version.",
+        default=None)
 
 
 @described(strawberry.enum)
@@ -402,9 +405,10 @@ TITLE_FIELDS = [
     # matched nothing and the filter could not discriminate. A title the library has
     # never seen definitively has no base, is not up to date and is not complete, so
     # the absent row reads as false.
-    ("have_base",    "COALESCE(ot.have_base, 0)",  "bool"),
-    ("up_to_date",   "COALESCE(ot.up_to_date, 0)", "bool"),
-    ("complete",     "COALESCE(ot.complete, 0)",   "bool"),
+    ("have_base",        "COALESCE(ot.have_base, 0)",        "bool"),
+    ("up_to_date",       "COALESCE(ot.up_to_date, 0)",       "bool"),
+    ("complete",         "COALESCE(ot.complete, 0)",         "bool"),
+    ("dlcs_up_to_date",  "COALESCE(ot.dlcs_up_to_date, 1)", "bool"),
 ]
 
 APP_FIELDS = [
@@ -445,6 +449,11 @@ FILE_FIELDS = [
 ]
 
 
+OWNED_SIZE_SQL = ("(SELECT COALESCE(SUM(f.size), 0) "
+    "FROM files f JOIN app_files af ON af.file_id = f.id "
+    "JOIN apps a ON a.id = af.app_id WHERE a.title_id = ot.id)")
+
+
 # ---- ordering ----
 #
 # The client picks a field from an enum, never a column name: the SQL fragment is
@@ -463,8 +472,8 @@ class OrderField(Enum):
         "Title name for `titles` and `apps`, file name for `files`. "
         "Case-insensitive, with unnamed rows last."))
     SIZE = strawberry.enum_value("size", description=(
-        "Bytes for `files`; the catalogue's install size, cast to a number, for "
-        "`titles`. Not applicable to `apps`."))
+        "Bytes for `files`; total owned file size for `titles`. "
+        "Not applicable to `apps`."))
     RELEASE_DATE = strawberry.enum_value("release_date", description=(
         "Catalogue release date for `titles` and `apps`. On `files` it sorts by "
         "`mtime`, the closest thing a file has."))
@@ -502,7 +511,7 @@ class OrderBy:
 TITLE_ORDER = {
     "name": "td.name IS NULL, td.name COLLATE NOCASE",
     "release_date": "td.release_date IS NULL, td.release_date",
-    "size": "td.size IS NULL, CAST(td.size AS INTEGER)",
+    "size": OWNED_SIZE_SQL,
 }
 
 APP_ORDER = {
@@ -525,6 +534,27 @@ FILE_ORDER = {
 }
 
 
+def _split_top_level(expr: str) -> List[str]:
+    """Split on commas that are not inside parentheses."""
+    parts: List[str] = []
+    depth = 0
+    current: List[str] = []
+    for ch in expr:
+        if ch == '(':
+            depth += 1
+            current.append(ch)
+        elif ch == ')':
+            depth -= 1
+            current.append(ch)
+        elif ch == ',' and depth == 0:
+            parts.append(''.join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    parts.append(''.join(current).strip())
+    return parts
+
+
 def order_sql(order_by: Optional[OrderBy], allowed: dict, default: str) -> str:
     """Build an ORDER BY body from a whitelisted field plus a direction.
 
@@ -538,7 +568,8 @@ def order_sql(order_by: Optional[OrderBy], allowed: dict, default: str) -> str:
     if expr is None:
         return f"{default} {direction}"
     # NULL-placement flags must not take the direction, or DESC would flip them.
-    parts = [p.strip() for p in expr.split(",")]
+    # Split on top-level commas only (not inside parentheses).
+    parts = _split_top_level(expr)
     ordered = ", ".join(p if p.endswith("IS NULL") else f"{p} {direction}" for p in parts)
     return f"{ordered}, {default}"
 

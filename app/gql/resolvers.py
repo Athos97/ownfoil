@@ -13,7 +13,7 @@ from .context import GraphQLContext
 from .filters import (
     AppFilter, AppType, FileFilter, OrderBy, TitleFilter, VerificationStatus,
     APP_FIELDS, APP_FIELDS_EXCEPT_OWNED, APP_ORDER, APP_ORDER_GROUPED,
-    FILE_FIELDS, FILE_ORDER, TITLE_FIELDS, TITLE_ORDER,
+    FILE_FIELDS, FILE_ORDER, OWNED_SIZE_SQL, TITLE_FIELDS, TITLE_ORDER,
     build_clauses, order_sql,
 )
 from .selection import Selection
@@ -91,6 +91,7 @@ def _title_cols(driver: str, sel: "Selection") -> str:
         cols.append("ot.up_to_date AS up_to_date")
         cols.append("ot.complete AS complete")
         cols.append("ot.dlcs_up_to_date AS dlcs_up_to_date")
+        cols.append(f"{OWNED_SIZE_SQL} AS owned_size")
     return ", ".join(cols)
 
 _FILE_COLS = """
@@ -171,6 +172,7 @@ def _build_title(row, *, with_apps: bool, with_files: bool) -> Title:
             up_to_date=bool(m.get('up_to_date')),
             complete=bool(m.get('complete')),
             dlcs_up_to_date=bool(m.get('dlcs_up_to_date', True)),
+            owned_size=int(m.get('owned_size') or 0),
         )
     return Title(
         title_id=strawberry.ID((m.get('title_id') or "").upper()),

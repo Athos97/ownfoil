@@ -57,6 +57,7 @@ class Ownership:
                             "owned. False also when nothing is owned at all.")
     complete: bool = desc("Every DLC titledb attributes to this title is owned.")
     dlcs_up_to_date: bool = desc("Every owned DLC is at its latest known version.")
+    owned_size: BigInt = desc("Total bytes of all owned files for this title.", default=0)
 
 
 @described(strawberry.type)
