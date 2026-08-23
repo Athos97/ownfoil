@@ -26,7 +26,6 @@
                     <th scope="col">What</th>
                     <th scope="col">User</th>
                     <th scope="col">Client</th>
-                    <th scope="col">Device</th>
                     <th scope="col">Detail</th>
                     <th scope="col">From</th>
                 </tr>
@@ -114,14 +113,12 @@
                 <td>${kindBadge(e.kind)}</td>
                 <td class="text-nowrap"></td>
                 <td>${clientCell(e.client)}</td>
-                <td class="font-monospace small text-secondary"></td>
-                <td style="max-width: 22rem;">${detailCell(e)}</td>
+                <td>${detailCell(e)}</td>
                 <td class="font-monospace small text-secondary"></td>`;
             tr.children[0].textContent = e.ts
                 ? new Date(e.ts).toLocaleString() : '';
             tr.children[2].textContent = e.username || '—';
-            tr.children[4].textContent = e.deviceUid || '—';
-            tr.children[6].textContent = e.ip || '—';
+            tr.children[5].textContent = e.ip || '—';
             tbody.appendChild(tr);
         });
     }
