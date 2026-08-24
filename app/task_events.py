@@ -114,7 +114,7 @@ def _read_workers():
     finally:
         connection.close()
     workers = {}
-    for worker_id, (proc, _stop_event) in list(pool.workers.items()):
+    for worker_id, (proc, _stop_event) in pool.snapshot().items():
         workers[worker_id] = {
             'id': worker_id,
             'pid': proc.pid,

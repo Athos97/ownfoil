@@ -45,7 +45,12 @@ SELECT * FROM
             SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END),
             SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
             COALESCE(SUM(progress), 0)
-     FROM downloads)
+     FROM downloads),
+  (SELECT COUNT(*),
+          COALESCE(GROUP_CONCAT(app_id || ':' || COALESCE(note, '')), '')
+     FROM app_blacklist),
+  (SELECT COUNT(*), COALESCE(MAX(id), 0)
+     FROM activity_events)
 """
 
 

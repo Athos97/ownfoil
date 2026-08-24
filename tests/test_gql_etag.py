@@ -18,7 +18,7 @@ import db as db_mod
 import titledb
 from app import create_app
 from constants import APP_TYPE_BASE, APP_TYPE_UPD
-from db import Apps, Files, Libraries, Task, Titles, db, init_db
+from db import ActivityEvent, Apps, BlacklistedApp, Files, Libraries, Task, Titles, db, init_db
 from gql import graphql_dispatch
 
 
@@ -131,6 +131,16 @@ def _start_a_task(session):
                      input_hash="x"))
 
 
+def _blacklist_an_app(session):
+    # Blacklisting flips App.blacklisted, hydrated via a join against this table
+    # (see resolvers._load_apps_for_titles), not a column on apps/titles itself.
+    session.add(BlacklistedApp(app_id=ALPHA_UPD, note="test"))
+
+
+def _record_an_activity_event(session):
+    session.add(ActivityEvent(kind="login", username="alice", client="web"))
+
+
 IN_PLACE_CHANGES = [
     ("title flags flipped by a scan", _flip_title_flags),
     ("an update becomes owned",       _own_the_update),
@@ -139,6 +149,8 @@ IN_PLACE_CHANGES = [
     ("a file is re-identified",       _reidentify_file),
     ("a file is compressed in place", _compress_a_file),
     ("a task reports progress",       _start_a_task),
+    ("an app is blacklisted",         _blacklist_an_app),
+    ("an activity event is recorded", _record_an_activity_event),
 ]
 
 

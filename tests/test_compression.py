@@ -479,7 +479,7 @@ def test_parent_completes_when_children_finish_before_it_parks(env):
     fired = []
 
     def fanout(**kwargs):
-        parent_id = tasks._current_task_id
+        parent_id = tasks.get_current_task_id()
         child_id = tasks.create_child_task(parent_id, "update_titles")
         child = db.session.get(Task, child_id)
         child.status = "completed"                    # another worker got there first
