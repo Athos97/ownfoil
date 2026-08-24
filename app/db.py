@@ -127,7 +127,7 @@ class Libraries(db.Model):
 
 class Files(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    library_id = db.Column(db.Integer, db.ForeignKey('libraries.id', ondelete="CASCADE"), nullable=False)
+    library_id = db.Column(db.Integer, db.ForeignKey('libraries.id', ondelete="CASCADE"), nullable=False, index=True)
     filepath = db.Column(db.String, unique=True, nullable=False)
     folder = db.Column(db.String)
     filename = db.Column(db.String, nullable=False)
@@ -220,7 +220,7 @@ app_files = db.Table('app_files',
 
 class Apps(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    title_id = db.Column(db.Integer, db.ForeignKey('titles.id', ondelete="CASCADE"), nullable=False)
+    title_id = db.Column(db.Integer, db.ForeignKey('titles.id', ondelete="CASCADE"), nullable=False, index=True)
     app_id = db.Column(db.String)
     app_version = db.Column(db.String)
     app_type = db.Column(db.String)
@@ -521,10 +521,13 @@ def purge_stale_events():
     from scan/organize until a restart."""
     cutoff = datetime.datetime.utcnow() - EVENT_TTL
     stale_ignored = IgnoredEvent.query.filter(IgnoredEvent.created_at < cutoff)
-    stale_temp = TempFile.query.filter(TempFile.created_at < cutoff)
-    # Keep claims on paths a committed file still uses - not stale, just old.
-    stale_temp = [t for t in stale_temp.all()
-                  if Files.query.filter_by(filepath=t.filepath).first() is None]
+    stale_temp = TempFile.query.filter(TempFile.created_at < cutoff).all()
+    # Keep claims on paths a committed file still uses - not stale, just old. One
+    # batched membership query rather than a per-row lookup.
+    if stale_temp:
+        committed_paths = {row[0] for row in db.session.query(Files.filepath).filter(
+            Files.filepath.in_([t.filepath for t in stale_temp])).all()}
+        stale_temp = [t for t in stale_temp if t.filepath not in committed_paths]
     removed_ignored = stale_ignored.delete(synchronize_session=False)
     for t in stale_temp:
         db.session.delete(t)
@@ -772,26 +775,17 @@ def remove_file_from_apps(file_id):
     
     return apps_updated
 
-def has_owned_apps(title_id):
-    """Check if a title has any owned apps"""
-    title = get_title(title_id)
-    if not title:
-        return False
-    
-    owned_apps = Apps.query.filter_by(title_id=title.id, owned=True).first()
-    return owned_apps is not None
-
 def remove_titles_without_owned_apps():
     """Remove titles that have no owned apps."""
-    titles_removed = 0
-    for title in get_all_titles():
-        if not has_owned_apps(title.title_id):
-            logger.debug(f"Removing title {title.title_id} - no owned apps remaining")
-            db.session.delete(title)
-            titles_removed += 1
-    if titles_removed:
+    from sqlalchemy import exists
+    has_owned = exists().where(Apps.title_id == Titles.id, Apps.owned == True)  # noqa: E712
+    titles_to_remove = Titles.query.filter(~has_owned).all()
+    for title in titles_to_remove:
+        logger.debug(f"Removing title {title.title_id} - no owned apps remaining")
+        db.session.delete(title)
+    if titles_to_remove:
         db.session.commit()
-    return titles_removed
+    return len(titles_to_remove)
 
 def _dir_prefix_like(dirpath):
     """LIKE pattern matching files directly or recursively under dirpath, escaping wildcards.

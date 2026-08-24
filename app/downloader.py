@@ -74,10 +74,12 @@ def get_missing_targets():
     source should ever search for or download them."""
     targets = []
     blacklisted = get_blacklisted_app_ids()
-    titles = get_all_titles()
-    for title in titles:
-        title_id = title.title_id
-        apps = get_all_title_apps(title_id)
+    # One query for every app rather than one get_all_title_apps() round trip per
+    # title: titles with no apps never had anything to contribute below anyway.
+    apps_by_title = {}
+    for app in get_all_apps():
+        apps_by_title.setdefault(app['title_id'], []).append(app)
+    for title_id, apps in apps_by_title.items():
         base_info = titles_lib.get_game_info(title_id) or {}
         base_name = base_info.get('name') or title_id
 
@@ -661,6 +663,7 @@ def _gc_orphan_part_files():
     """Delete .part/.part.state files whose download row is gone or completed:
     the resume machinery leaves them behind when a target is deleted, fails
     permanently, or completes by other means."""
+    from itertools import islice
     from pathlib import Path as _Path
     roots = {os.path.dirname(p) or '/' for p in _ghost_library_roots()}
     live_keys = set()
@@ -670,7 +673,9 @@ def _gc_orphan_part_files():
     removed = 0
     for root in roots:
         try:
-            candidates = list(_Path(root).rglob('*.part'))[:500]
+            # islice stops the walk itself at 500 matches; list(rglob(...))[:500]
+            # would walk the whole tree first and only slice afterwards.
+            candidates = list(islice(_Path(root).rglob('*.part'), 500))
         except OSError:
             continue
         for part in candidates:
@@ -987,12 +992,13 @@ def _delete_ghost_parts_for(d):
     would misinterpret. Returns how many files went."""
     if (d.source or SOURCE_TORRENTS) != SOURCE_GHOSTESHOP or not d.torrent_name:
         return 0
+    from itertools import islice
     from pathlib import Path as _Path
     wanted = {d.torrent_name + '.part', d.torrent_name + '.part.state'}
     removed = 0
     for root in _ghost_library_roots():
         try:
-            candidates = list(_Path(root).rglob('*.part*'))[:500]
+            candidates = list(islice(_Path(root).rglob('*.part*'), 500))
         except OSError:
             continue
         for path in candidates:
