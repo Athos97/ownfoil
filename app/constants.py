@@ -6,6 +6,9 @@ CONFIG_DIR = os.environ.get('OWNFOIL_CONFIG_DIR') or os.path.join(APP_DIR, 'conf
 DB_FILE = os.path.join(CONFIG_DIR, 'ownfoil.db')
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'settings.yaml')
 KEYS_FILE = os.path.join(CONFIG_DIR, 'keys.txt')
+# Generated on first run and persisted here; never hardcoded/committed. Signs Flask-Login
+# session cookies, so a stable value across restarts is required to keep sessions alive.
+SECRET_KEY_FILE = os.path.join(CONFIG_DIR, 'secret_key')
 ALEMBIC_DIR = os.path.join(APP_DIR, 'migrations')
 ALEMBIC_CONF = os.path.join(ALEMBIC_DIR, 'alembic.ini')
 TITLEDB_DIR = os.path.join(DATA_DIR, 'titledb')
@@ -112,7 +115,10 @@ DEFAULT_SETTINGS = {
             "username": "",
             "password": "",
             "language": "en",
-            "verify_ssl": False,
+            # Default on: this talks to a third-party portal over the network and handles
+            # login credentials, so verification stays on unless an admin opts out for a
+            # self-signed/private deployment.
+            "verify_ssl": True,
             # Empty: downloads land in the first configured library path.
             "library_path": "",
             "interval": "24h",

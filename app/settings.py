@@ -5,6 +5,7 @@ import os, sys, tempfile
 import datetime
 import threading
 import hashlib
+import secrets
 from contextlib import contextmanager
 
 from nsz.nut import Keys
@@ -55,6 +56,39 @@ def _safe_mtime(path):
         return os.path.getmtime(path)
     except OSError:
         return None
+
+def get_or_create_secret_key():
+    """Return the Flask session-signing key, generating and persisting one on first run.
+
+    Signs Flask-Login's session/remember-me cookies: anyone holding this value can forge a
+    valid session for any user id, so it must never be hardcoded or committed to source.
+    """
+    if os.path.exists(SECRET_KEY_FILE):
+        with open(SECRET_KEY_FILE, 'r') as f:
+            key = f.read().strip()
+        if key:
+            return key
+
+    key = secrets.token_hex(32)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(SECRET_KEY_FILE), prefix='.secret_key-', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            f.write(key)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, SECRET_KEY_FILE)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        os.chmod(SECRET_KEY_FILE, 0o600)
+    except OSError:
+        pass
+    return key
+
 
 def get_settings():
     """Return settings, re-reading when settings.yaml or keys.txt mtime changes."""
@@ -248,21 +282,6 @@ def load_settings():
         # Prime Keys.keys_loaded for this process (used by identification code)
         load_keys()
         return settings
-
-def verify_settings(section, data):
-    success = True
-    errors = []
-    if section == 'library':
-        # Check that paths exist
-        for dir in data['paths']:
-            if not os.path.exists(dir):
-                success = False
-                errors.append({
-                    'path': 'library/path',
-                    'error': f"Path {dir} does not exists."
-                })
-                break
-    return success, errors
 
 def get_library_paths():
     """Return the configured library paths as a plain list of path strings."""
