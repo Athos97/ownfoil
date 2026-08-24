@@ -10,9 +10,45 @@ from settings import get_settings
 
 import logging
 import re
+import threading
+import time
 
 # Retrieve main logger
 logger = logging.getLogger('main')
+
+# --- Web login rate limiting ---
+# In-process only (consistent with the rest of the app's in-memory state, e.g.
+# utils.throttle): correct today because run.py hard-codes a single Gunicorn
+# worker. Scoped to the web login form, not Basic Auth (used by every shop
+# client request) - a shared IP-keyed counter there would risk locking out a
+# legitimate, merely-misconfigured Switch client that retries automatically.
+LOGIN_MAX_ATTEMPTS = 10
+LOGIN_WINDOW_SECONDS = 300  # 5 minutes
+
+_login_attempts_lock = threading.Lock()
+_login_attempts = {}  # key -> [timestamps of recent failed attempts]
+
+
+def _login_rate_limited(key):
+    """True if `key` has failed to log in too many times recently."""
+    now = time.monotonic()
+    with _login_attempts_lock:
+        attempts = [t for t in _login_attempts.get(key, []) if now - t < LOGIN_WINDOW_SECONDS]
+        if attempts:
+            _login_attempts[key] = attempts
+        else:
+            _login_attempts.pop(key, None)
+        return len(attempts) >= LOGIN_MAX_ATTEMPTS
+
+
+def _record_login_failure(key):
+    with _login_attempts_lock:
+        _login_attempts.setdefault(key, []).append(time.monotonic())
+
+
+def _record_login_success(key):
+    with _login_attempts_lock:
+        _login_attempts.pop(key, None)
 
 def validate_password(password):
     """
@@ -234,6 +270,12 @@ def login():
     password = request.form.get('password')
     remember = bool(request.form.get('remember'))
     next_url = request.args.get('next', '')
+    ip = client_address(request)
+
+    if _login_rate_limited(ip):
+        logger.warning(f'Login rate-limited for {ip}')
+        activity.record_login(username, success=False, ip=ip, detail='rate limited')
+        return redirect(url_for('auth.login'))
 
     user = User.query.filter_by(user=username).first()
 
@@ -241,13 +283,15 @@ def login():
     # take the user-supplied password, hash it, and compare it to the hashed password in the database
     if not user or not check_password_hash(user.password, password):
         logger.warning(f'Incorrect login for user {username}')
-        activity.record_login(username, success=False, ip=client_address(request),
+        _record_login_failure(ip)
+        activity.record_login(username, success=False, ip=ip,
                               detail='invalid credentials')
         return redirect(url_for('auth.login')) # if the user doesn't exist or password is wrong, reload the page
 
     # if the above check passes, then we know that the user has the right credentials
     logger.info(f'Sucessfull login for user {username}')
-    activity.record_login(username, success=True, ip=client_address(request))
+    _record_login_success(ip)
+    activity.record_login(username, success=True, ip=ip)
     login_user(user, remember=remember)
 
     return redirect(next_url if len(next_url) else '/')
