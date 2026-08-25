@@ -105,3 +105,16 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Every push to main/staging reuses that branch's floating tag, which leaves
+      # the previous digest (and its per-platform children) behind as untagged
+      # cruft. delete-untagged (the default with no other options set) sweeps
+      # exactly those - anything still carrying a tag (a version release) is left
+      # alone. dry-run first: flip to false once a run's log confirms the
+      # candidate list is exactly the old main/staging digests.
+      - name: Clean up untagged ghcr.io image versions
+        if: steps.publish.outputs.push == 'true'
+        uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f  # v1.2.2
+        with:
+          delete-untagged: true
+          dry-run: true
