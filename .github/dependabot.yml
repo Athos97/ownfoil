@@ -8,7 +8,7 @@ updates:
   # Maintain dependencies for GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
-    target-branch: "v3"
+    target-branch: "main"
     schedule:
       interval: "weekly"
     labels:
@@ -16,7 +16,7 @@ updates:
 
   - package-ecosystem: "docker"
     directory: "/"
-    target-branch: "v3"
+    target-branch: "main"
     schedule:
       interval: "weekly"
     labels:
@@ -24,7 +24,7 @@ updates:
       
   - package-ecosystem: "pip"
     directory: "/"
-    target-branch: "v3"
+    target-branch: "main"
     schedule:
       interval: "weekly"
     labels:
