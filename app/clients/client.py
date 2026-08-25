@@ -178,9 +178,18 @@ class BaseClient(ABC):
         return True, None, None
 
     def _generate_shop_files(self, content_filter: Optional[str] = None) -> list:
-        """Generate the files list for the shop with optional content type filtering."""
+        """Generate the files list for the shop with optional content type filtering.
+
+        The URL carries this client's name as a query param: the file-download
+        request that actually follows it doesn't resend the shop-protocol
+        identification headers (Theme/Uid/Version/etc. - confirmed against a real
+        Tinfoil download, which arrives as a bare authenticated GET), so
+        serve_game() can't otherwise tell who is downloading. This is the one
+        place that genuinely knows."""
         files = self.get_filtered_files(content_filter)
-        return [{'url': f'/api/get_game/{f.id}#{f.filename}', 'size': f.size} for f in files]
+        client_param = self.CLIENT_NAME.lower()
+        return [{'url': f'/api/get_game/{f.id}?client={client_param}#{f.filename}', 'size': f.size}
+                for f in files]
 
     # ==================== Abstract Methods (Required) ====================
 

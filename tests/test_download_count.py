@@ -116,11 +116,32 @@ def test_a_range_past_the_end_of_the_file_is_never_counted(shop, download):
 
 
 def test_get_game_download_records_the_identified_client(shop):
-    """/api/get_game is the URL Tinfoil/CyberFoil shop listings link to (unlike Sphaira,
-    which serves its own route) - the activity log must say which one, not nothing, or
-    every download through it reads as client-less in the Activity page."""
+    """Fallback path: a request that still carries the full shop-protocol headers is
+    identified by them, the same way get_client_for_request() works on the shop route."""
     resp = get_game_download(shop, headers=CYBERFOIL_HEADERS)
     assert resp.status_code == 200
     with shop.app.app_context():
         event = ActivityEvent.query.filter_by(kind='download').first()
         assert event.client == 'cyberfoil'
+
+
+def test_get_game_download_uses_the_client_query_param(shop):
+    """Primary path, and the one real clients actually hit: confirmed against a real
+    Tinfoil download that the file-download request is a bare authenticated GET with
+    none of the shop-protocol identification headers (Theme/Uid/Version/etc.) - only
+    Basic Auth and a Range. The ?client= query param BaseClient._generate_shop_files
+    sets on every shop-listing URL is what makes the activity log show who it was."""
+    id_ = file_id(shop)
+    resp = shop.client.get(f"/api/get_game/{id_}?client=tinfoil")
+    assert resp.status_code == 200
+    with shop.app.app_context():
+        event = ActivityEvent.query.filter_by(kind='download').first()
+        assert event.client == 'tinfoil'
+
+
+def test_shop_listing_urls_carry_the_client_query_param(shop):
+    """The other half of the fix: the shop response itself must actually set it."""
+    body = shop.client.get("/", headers=CYBERFOIL_HEADERS).get_json()
+    assert body["files"], "fixture library must have at least one file"
+    for entry in body["files"]:
+        assert "?client=cyberfoil#" in entry["url"]

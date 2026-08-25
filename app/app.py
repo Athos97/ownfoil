@@ -753,15 +753,25 @@ def serve_game(id):
     # them, and a range past the end of the file raises out of here without transferring.
     response = send_from_directory(filedir, filename)
     counted = increment_download_count_throttled(filepath, client_address(request))
-    client = get_client_for_request(request)
-    if client is None:
-        # TEMP diagnostic: identify_client() is failing on this route for a real
-        # client's download request even though it succeeds on the shop route -
-        # dump what actually arrives so the header mismatch can be found.
-        logger.warning(f"serve_game: no client identified. Headers: {dict(request.headers)}")
     activity.record_download(
         request, filepath, size=file_size,
-        client_name=client.CLIENT_NAME if client else None,
+        client_name=_download_client_name(request),
         username=(request.authorization.username if request.authorization else None),
         counted=bool(counted))
     return response
+
+
+def _download_client_name(request):
+    """Which client is fetching this file, for the activity log.
+
+    The ?client= query param BaseClient._generate_shop_files sets is authoritative:
+    confirmed against a real Tinfoil download that the actual file-download request
+    doesn't resend the shop-protocol identification headers, so get_client_for_request()
+    can't tell clients apart here the way it can on the shop route. Header-based
+    detection is only a fallback, for a URL that doesn't carry the param (e.g. one
+    saved from before this existed)."""
+    param = (request.args.get('client') or '').lower()
+    if param in {c.CLIENT_NAME.lower() for c in SUPPORTED_CLIENTS}:
+        return param
+    client = get_client_for_request(request)
+    return client.CLIENT_NAME if client else None

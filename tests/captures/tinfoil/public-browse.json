@@ -111,7 +111,7 @@
         ],
         "body": {
           "kind": "binary",
-          "length": 464,
+          "length": 480,
           "sha256": "51930dd69305bbb7129427b007ace7ccca392b269591c3447489b7824e73ed84",
           "head_hex": "54494e464f494cfd0cad38573b788465"
         }

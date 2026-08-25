@@ -119,7 +119,7 @@
             "files": [
               {
                 "size": 4096,
-                "url": "/api/get_game/1#Test Game [0100000000010000][v0].nsp"
+                "url": "/api/get_game/1?client=tinfoil#Test Game [0100000000010000][v0].nsp"
               }
             ],
             "success": "Ownfoil capture fixture"

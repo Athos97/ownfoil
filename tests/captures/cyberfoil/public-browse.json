@@ -111,23 +111,23 @@
             "files": [
               {
                 "size": 4096,
-                "url": "/api/get_game/1#Test Game [0100000000010000][v0].nsp"
+                "url": "/api/get_game/1?client=cyberfoil#Test Game [0100000000010000][v0].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/2#Test Game [0100000000010800][v65536].nsp"
+                "url": "/api/get_game/2?client=cyberfoil#Test Game [0100000000010800][v65536].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/3#Test Game Extra [0100000000011001][v0].nsp"
+                "url": "/api/get_game/3?client=cyberfoil#Test Game Extra [0100000000011001][v0].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/4#Multi Pack [0100000000012000].xci"
+                "url": "/api/get_game/4?client=cyberfoil#Multi Pack [0100000000012000].xci"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/5#Mystery File.nsp"
+                "url": "/api/get_game/5?client=cyberfoil#Mystery File.nsp"
               }
             ],
             "success": "Ownfoil capture fixture"
@@ -205,23 +205,23 @@
             "files": [
               {
                 "size": 4096,
-                "url": "/api/get_game/1#Test Game [0100000000010000][v0].nsp"
+                "url": "/api/get_game/1?client=cyberfoil#Test Game [0100000000010000][v0].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/2#Test Game [0100000000010800][v65536].nsp"
+                "url": "/api/get_game/2?client=cyberfoil#Test Game [0100000000010800][v65536].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/3#Test Game Extra [0100000000011001][v0].nsp"
+                "url": "/api/get_game/3?client=cyberfoil#Test Game Extra [0100000000011001][v0].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/4#Multi Pack [0100000000012000].xci"
+                "url": "/api/get_game/4?client=cyberfoil#Multi Pack [0100000000012000].xci"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/5#Mystery File.nsp"
+                "url": "/api/get_game/5?client=cyberfoil#Mystery File.nsp"
               }
             ],
             "success": "Ownfoil capture fixture"
@@ -299,23 +299,23 @@
             "files": [
               {
                 "size": 4096,
-                "url": "/api/get_game/1#Test Game [0100000000010000][v0].nsp"
+                "url": "/api/get_game/1?client=cyberfoil#Test Game [0100000000010000][v0].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/2#Test Game [0100000000010800][v65536].nsp"
+                "url": "/api/get_game/2?client=cyberfoil#Test Game [0100000000010800][v65536].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/3#Test Game Extra [0100000000011001][v0].nsp"
+                "url": "/api/get_game/3?client=cyberfoil#Test Game Extra [0100000000011001][v0].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/4#Multi Pack [0100000000012000].xci"
+                "url": "/api/get_game/4?client=cyberfoil#Multi Pack [0100000000012000].xci"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/5#Mystery File.nsp"
+                "url": "/api/get_game/5?client=cyberfoil#Mystery File.nsp"
               }
             ],
             "success": "Ownfoil capture fixture"
@@ -393,23 +393,23 @@
             "files": [
               {
                 "size": 4096,
-                "url": "/api/get_game/1#Test Game [0100000000010000][v0].nsp"
+                "url": "/api/get_game/1?client=cyberfoil#Test Game [0100000000010000][v0].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/2#Test Game [0100000000010800][v65536].nsp"
+                "url": "/api/get_game/2?client=cyberfoil#Test Game [0100000000010800][v65536].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/3#Test Game Extra [0100000000011001][v0].nsp"
+                "url": "/api/get_game/3?client=cyberfoil#Test Game Extra [0100000000011001][v0].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/4#Multi Pack [0100000000012000].xci"
+                "url": "/api/get_game/4?client=cyberfoil#Multi Pack [0100000000012000].xci"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/5#Mystery File.nsp"
+                "url": "/api/get_game/5?client=cyberfoil#Mystery File.nsp"
               }
             ],
             "success": "Ownfoil capture fixture"
@@ -487,23 +487,23 @@
             "files": [
               {
                 "size": 4096,
-                "url": "/api/get_game/1#Test Game [0100000000010000][v0].nsp"
+                "url": "/api/get_game/1?client=cyberfoil#Test Game [0100000000010000][v0].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/2#Test Game [0100000000010800][v65536].nsp"
+                "url": "/api/get_game/2?client=cyberfoil#Test Game [0100000000010800][v65536].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/3#Test Game Extra [0100000000011001][v0].nsp"
+                "url": "/api/get_game/3?client=cyberfoil#Test Game Extra [0100000000011001][v0].nsp"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/4#Multi Pack [0100000000012000].xci"
+                "url": "/api/get_game/4?client=cyberfoil#Multi Pack [0100000000012000].xci"
               },
               {
                 "size": 4096,
-                "url": "/api/get_game/5#Mystery File.nsp"
+                "url": "/api/get_game/5?client=cyberfoil#Mystery File.nsp"
               }
             ],
             "success": "Ownfoil capture fixture"
