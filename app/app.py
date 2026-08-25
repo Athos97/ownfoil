@@ -754,6 +754,11 @@ def serve_game(id):
     response = send_from_directory(filedir, filename)
     counted = increment_download_count_throttled(filepath, client_address(request))
     client = get_client_for_request(request)
+    if client is None:
+        # TEMP diagnostic: identify_client() is failing on this route for a real
+        # client's download request even though it succeeds on the shop route -
+        # dump what actually arrives so the header mismatch can be found.
+        logger.warning(f"serve_game: no client identified. Headers: {dict(request.headers)}")
     activity.record_download(
         request, filepath, size=file_size,
         client_name=client.CLIENT_NAME if client else None,
