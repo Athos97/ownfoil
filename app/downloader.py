@@ -447,18 +447,25 @@ def download_target_ghosteshop(target, settings, existing_row=None, task_id=None
             update_download(row.id, status='completed', error=CLEAR_ERROR, progress=100)
         return True
 
+    # add_download is get-or-create: for a target queued in advance (Add
+    # Content, or a restart's requeue) the row already exists, and add_download
+    # returns it untouched - a bare add_download(status='failed') would then
+    # silently no-op instead of ever marking the row failed. update_download
+    # afterwards applies the outcome either way.
     try:
         provider = ghostshop.GhosteshopProvider(ghost)
         session = provider.login()
     except ghostshop.GhostshopError as e:
-        add_download(**common, status='failed', error=str(e))
+        row = add_download(**common, status='failed', error=str(e))
+        update_download(row.id, status='failed', error=str(e))
         logger.error(f"[ghosteshop] login failed: {e}")
         return False
 
     entry = _resolve_ghost_entry(provider, session, target, settings)
     if entry is None:
         reason = 'Not found in the Ghost eShop catalog'
-        add_download(**common, status='failed', error=reason)
+        row = add_download(**common, status='failed', error=reason)
+        update_download(row.id, status='failed', error=reason)
         logger.info(f"[ghosteshop] No match for {target.get('app_id')} "
                     f"v{target.get('app_version')}")
         return False
@@ -534,12 +541,15 @@ def download_target_ghosteshop(target, settings, existing_row=None, task_id=None
 
 
 def queue_ghosteshop_download(title_id, app_id, app_version, app_type, name):
-    """Add Content: create a queued row the next Ghost eShop pass will process.
+    """Add Content: create a queued row and check it against the catalog right
+    away, rather than leaving it to the next scheduled Ghost eShop pass (which
+    can be a day out) - content that isn't actually in the catalog fails fast
+    instead of sitting queued with no feedback.
 
     Works for BASE targets too - the periodic job only computes missing
     updates/DLC, but queued rows are downloaded whatever their type.
     """
-    return add_download(
+    row = add_download(
         title_id=title_id,
         app_id=app_id,
         app_version=str(app_version),
@@ -548,6 +558,13 @@ def queue_ghosteshop_download(title_id, app_id, app_version, app_type, name):
         source=SOURCE_GHOSTESHOP,
         status='queued',
     )
+    # Same input shape the periodic pass uses (app_id/app_version/name only -
+    # download_ghosteshop_row reads title_id/app_type from this row, not from
+    # task kwargs) so the two dedup against each other instead of racing.
+    import tasks as tasks_mod
+    tasks_mod.enqueue_task(GHOSTESHOP_DOWNLOAD_TASK, {
+        'app_id': app_id, 'app_version': str(app_version), 'name': name})
+    return row
 
 
 # -------------------------------------------------------------------- shared

@@ -601,14 +601,24 @@ def cleanup_tasks():
     from db import purge_stale_events
     purge_stale_events()
 
-    # Ghost rows left mid-transfer go back to queued so the surviving manual
-    # passes (or the re-armed schedule) pick them up with a cheap resume.
+    # Ghost rows left mid-transfer go back to queued and get an immediate
+    # re-check task, rather than sitting queued until the next scheduled pass
+    # (which can be a day out) notices them - same reasoning as
+    # queue_ghosteshop_download's immediate enqueue below. A row whose content
+    # simply isn't in the catalog fails fast instead of looking stuck.
     from db import Download
-    flipped = Download.query.filter_by(source='ghosteshop', status='downloading').update(
-        {'status': 'queued', 'progress': 0})
-    if flipped:
+    interrupted = Download.query.filter_by(source='ghosteshop', status='downloading').all()
+    if interrupted:
+        for d in interrupted:
+            d.status = 'queued'
+            d.progress = 0
         db.session.commit()
-        logger.info(f"Requeued {flipped} interrupted Ghost eShop download(s).")
+        for d in interrupted:
+            # Same input shape the periodic pass uses, so the two dedup
+            # against each other instead of racing (see queue_ghosteshop_download).
+            enqueue_task(downloader_lib.GHOSTESHOP_DOWNLOAD_TASK, {
+                'app_id': d.app_id, 'app_version': str(d.app_version), 'name': d.name})
+        logger.info(f"Requeued {len(interrupted)} interrupted Ghost eShop download(s).")
 
 
 # --- Helpers ---

@@ -252,6 +252,41 @@ def test_startup_requeues_interrupted_ghost_rows(library):
     row = get_download_by_app(ZELDA_UPD_TID, '1114112')
     assert row.status == 'queued'
     assert row.progress == 0
+    # And gets an immediate re-check rather than sitting queued until the next
+    # scheduled pass (which can be a day out) - unavailable content should
+    # fail fast, not look silently stuck.
+    task = tasks_mod.Task.query.filter_by(
+        task_name=downloader_lib.GHOSTESHOP_DOWNLOAD_TASK).one()
+    assert json.loads(task.input_json)['app_id'] == ZELDA_UPD_TID
+
+
+def test_queueing_unavailable_content_fails_fast(library, portal, tmp_path):
+    """Add Content for something the catalog doesn't carry must not just sit
+    'queued' until the next scheduled pass (which can be a day out) - the
+    immediate task queue_ghosteshop_download enqueues should resolve it and
+    fail the row right away, with a reason, the first time it actually runs."""
+    from worker import TaskWorker
+    settings = ghost_settings(portal, tmp_path)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(tasks_mod, 'get_settings', lambda: settings)
+    monkeypatch.setattr(downloader_lib, 'get_settings', lambda: settings)
+
+    # 01007EF00011F002 is a known versions-but-not-catalog case (see
+    # mock_ghostshop_portal.CATALOG's comment) - titledb could know about it,
+    # Ghost eShop does not carry it.
+    row = downloader_lib.queue_ghosteshop_download(
+        title_id=ZELDA_TID, app_id='01007EF00011F002', app_version='0',
+        app_type='DLC', name='Zelda BOTW DLC2')
+    assert row.status == 'queued'
+
+    task = tasks_mod.Task.query.filter_by(
+        task_name=downloader_lib.GHOSTESHOP_DOWNLOAD_TASK).one()
+    TaskWorker(library, worker_id=1).execute_task(task.id)
+
+    row = get_download_by_app('01007EF00011F002', '0')
+    assert row.status == 'failed'
+    assert 'catalog' in row.error.lower()
+    monkeypatch.undo()
 
 
 # --- per-file retry pass arming ---
@@ -295,9 +330,9 @@ def test_pause_ghost_marks_row_and_cancels_task(library, portal, tmp_path):
         title_id=ZELDA_TID, app_id=ZELDA_UPD_TID, app_version='1114112',
         app_type='UPDATE', name='Zelda BOTW')
     update_download(row.id, status='downloading', progress=30)
-    task = tasks_mod.enqueue_task(downloader_lib.GHOSTESHOP_DOWNLOAD_TASK,
-                                  {'app_id': ZELDA_UPD_TID,
-                                   'app_version': '1114112'})[0]
+    # queue_ghosteshop_download already enqueued the driving task itself.
+    task = tasks_mod.Task.query.filter_by(
+        task_name=downloader_lib.GHOSTESHOP_DOWNLOAD_TASK).one()
 
     ok, msg = downloader_lib.pause_download(row.id)
 
@@ -320,7 +355,12 @@ def test_resume_ghost_requeues_and_encoles_task(library, portal, tmp_path):
     row = downloader_lib.queue_ghosteshop_download(
         title_id=ZELDA_TID, app_id=ZELDA_UPD_TID, app_version='1114112',
         app_type='UPDATE', name='Zelda BOTW')
-    update_download(row.id, status='paused', progress=30)
+    update_download(row.id, status='downloading', progress=30)
+    # A real pause cancels the task queue_ghosteshop_download already enqueued -
+    # mirror that instead of jumping straight to 'paused', or its still-live
+    # task would linger alongside the one resume enqueues below.
+    ok, _ = downloader_lib.pause_download(row.id)
+    assert ok
 
     ok, _msg = downloader_lib.resume_download(row.id)
 
