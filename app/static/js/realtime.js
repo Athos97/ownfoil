@@ -72,7 +72,13 @@ class Realtime {
         };
 
         this.ws.onmessage = (e) => {
-            const event = JSON.parse(e.data);
+            let event;
+            try {
+                event = JSON.parse(e.data);
+            } catch (err) {
+                console.error('Realtime: malformed message', e.data, err);
+                return;
+            }
             (this.handlers[event.topic] || []).forEach(h => h(event.type, event.data));
         };
 

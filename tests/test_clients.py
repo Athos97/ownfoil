@@ -271,8 +271,10 @@ def test_an_authorized_account_gets_the_listing(shop, client, name):
 
 REFUSALS = {
     "private-no-credentials": "Shop requires authentication.\nNo authentication provided.",
-    "unknown-user": "Shop requires authentication.\nUnknown user ghost.",
-    "wrong-password": "Shop requires authentication.\nIncorrect password for user shopper.",
+    # Both refusals now say exactly the same thing: distinguishing them would let a
+    # caller enumerate valid usernames against this endpoint.
+    "unknown-user": "Shop requires authentication.\nInvalid credentials.",
+    "wrong-password": "Shop requires authentication.\nInvalid credentials.",
     "no-shop-access": "User noshop does not have access to the shop.",
     "client-disabled": "Shop access from {client} is disabled.",
 }

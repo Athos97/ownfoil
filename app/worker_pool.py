@@ -121,6 +121,16 @@ class WorkerPool:
         with self._lock:
             return {wid for wid, (proc, _e) in self.workers.items() if proc.is_alive()}
 
+    def snapshot(self):
+        """A point-in-time copy of worker_id -> (Process, MPEvent).
+
+        Every mutator of self.workers (start/stop/scale/restart, the watchdog) holds
+        self._lock; a caller just reading the dict (e.g. the realtime poller) must
+        too, or a concurrent mutation can raise 'dictionary changed size during
+        iteration' out from under it."""
+        with self._lock:
+            return dict(self.workers)
+
     @property
     def count(self):
         return len(self.workers)

@@ -143,9 +143,16 @@ def create_app(db_uri=None):
     app = Flask(__name__)
     app.url_map.strict_slashes = False  # Disable automatic trailing slash redirects globally, needed for Sphaira
     app.config["SQLALCHEMY_DATABASE_URI"] = db_uri or OWNFOIL_DB
-    # TODO: generate random secret_key
-    app.config['SECRET_KEY'] = '8accb915665f11dfa15c2db1a4e8026905f57716'
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    app.config['SECRET_KEY'] = get_or_create_secret_key()
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    # SameSite=Lax blocks the cookie on cross-site POST/fetch (the actual CSRF vector for
+    # this app's JSON APIs) while still allowing normal top-level-navigation logins.
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.config['SESSION_COOKIE_HTTPONLY'] = True
+    # Off by default so LAN-only HTTP deployments (the common self-hosted case) aren't
+    # locked out; set when Ownfoil is served over HTTPS (e.g. behind a reverse proxy).
+    app.config['SESSION_COOKIE_SECURE'] = os.environ.get('OWNFOIL_SECURE_COOKIES', '').lower() in ('1', 'true', 'yes')
 
     db.init_app(app)
     migrate.init_app(app, db)
@@ -329,12 +336,9 @@ def game_detail_page(title_id):
     """One game's family detail: base, updates and DLCs with ownership state.
 
     Same access model as the library grid itself: shop access (or a public shop)."""
-    settings = get_settings()
-    if not settings['shop']['public'] and admin_account_created():
-        if not current_user.is_authenticated:
-            return login_manager.unauthorized()
-        if not current_user.has_shop_access():
-            return 'Forbidden', 403
+    denied = shop_access_error()
+    if denied is not None:
+        return denied
     title_id = title_id.upper()
     if not re.fullmatch(r'[0-9A-F]{16}', title_id):
         return 'Not a title id', 404
@@ -349,11 +353,9 @@ def setup_page():
     settings = get_settings()
 
     # Check if user has access (must have shop access or shop must be public)
-    if not settings['shop']['public'] and admin_account_created():
-        if not current_user.is_authenticated:
-            return login_manager.unauthorized()
-        if not current_user.has_shop_access():
-            return 'Forbidden', 403
+    denied = shop_access_error()
+    if denied is not None:
+        return denied
 
     local_address = None
     local_port  = None
@@ -627,12 +629,12 @@ def upload_file():
     errors = []
     success = False
     valid_keys = None
+    # Keep the previous keys recoverable across the whole operation: an invalid or
+    # failed upload must not leave the instance keyless.
+    backup = None
     try:
         file = request.files['file']
         if file and allowed_file(file.filename):
-            # Keep the previous keys recoverable: an invalid upload must not
-            # leave the instance keyless (the old code deleted whatever landed).
-            backup = None
             if os.path.exists(KEYS_FILE):
                 backup = KEYS_FILE + '.bak'
                 shutil.copy2(KEYS_FILE, backup)
@@ -652,10 +654,19 @@ def upload_file():
 
     except Exception as e:
         logger.error(f'Failed to upload console keys file: {e}')
-        try:
-            os.remove(KEYS_FILE)
-        except OSError:
-            pass
+        if backup and os.path.exists(backup):
+            # Restore the last known-good keys rather than leaving the instance keyless.
+            try:
+                shutil.move(backup, KEYS_FILE)
+            except OSError:
+                pass
+        elif not backup:
+            # Nothing valid existed before this upload, so there's nothing to restore;
+            # remove whatever partial/invalid data may have landed.
+            try:
+                os.remove(KEYS_FILE)
+            except OSError:
+                pass
         success = False
         errors.append(str(e))
 

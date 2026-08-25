@@ -809,6 +809,7 @@
 {% endblock %}
 
 {% block panel_scripts %}
+<script src="{{ url_for('static', filename='js/format.js') }}"></script>
 <script>
 
     settings_map = {
@@ -1887,13 +1888,13 @@
             if (body.success) {
                 let msg = `Imported ${body.imported} entrie(s).`;
                 if (body.invalid && body.invalid.length) {
-                    msg += ` Skipped ${body.invalid.length} invalid id(s): ${body.invalid.join(', ')}`;
+                    msg += ` Skipped ${body.invalid.length} invalid id(s): ${body.invalid.map(escHtml).join(', ')}`;
                 }
                 result.innerHTML = `<div class="alert alert-success py-2 mt-2">${msg}</div>`;
                 loadBlacklist();
             } else {
                 result.innerHTML = `<div class="alert alert-danger py-2 mt-2">${
-                    (body.errors || ['Import failed.']).join(' ')}</div>`;
+                    (body.errors || ['Import failed.']).map(escHtml).join(' ')}</div>`;
             }
         } catch (err) {
             console.error(err);

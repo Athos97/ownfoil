@@ -101,9 +101,9 @@ class TaskWorker:
         display_name = tasks_mod.task_display_name(task.task_name, input_data)
 
         try:
-            tasks_mod._current_task_id = task_id
+            tasks_mod.set_current_task_id(task_id)
             result = task_func(**input_data)
-            tasks_mod._current_task_id = None
+            tasks_mod.set_current_task_id(None)
 
             # Re-read task — function may have set waiting_for_children
             db.session.expire(task)
@@ -129,7 +129,7 @@ class TaskWorker:
             record_task_history(task_id, task.task_name, display_name,
                                 'completed', started_at=task.started_at)
         except Exception as e:
-            tasks_mod._current_task_id = None
+            tasks_mod.set_current_task_id(None)
             logger.error(f"Task '{display_name}' ({task_id}) failed: {e}")
             db.session.rollback()
             task = db.session.get(Task, task_id)

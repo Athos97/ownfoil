@@ -6,12 +6,49 @@ from db import *
 from flask_login import LoginManager
 import activity
 from utils import client_address
+from settings import get_settings
 
 import logging
 import re
+import threading
+import time
 
 # Retrieve main logger
 logger = logging.getLogger('main')
+
+# --- Web login rate limiting ---
+# In-process only (consistent with the rest of the app's in-memory state, e.g.
+# utils.throttle): correct today because run.py hard-codes a single Gunicorn
+# worker. Scoped to the web login form, not Basic Auth (used by every shop
+# client request) - a shared IP-keyed counter there would risk locking out a
+# legitimate, merely-misconfigured Switch client that retries automatically.
+LOGIN_MAX_ATTEMPTS = 10
+LOGIN_WINDOW_SECONDS = 300  # 5 minutes
+
+_login_attempts_lock = threading.Lock()
+_login_attempts = {}  # key -> [timestamps of recent failed attempts]
+
+
+def _login_rate_limited(key):
+    """True if `key` has failed to log in too many times recently."""
+    now = time.monotonic()
+    with _login_attempts_lock:
+        attempts = [t for t in _login_attempts.get(key, []) if now - t < LOGIN_WINDOW_SECONDS]
+        if attempts:
+            _login_attempts[key] = attempts
+        else:
+            _login_attempts.pop(key, None)
+        return len(attempts) >= LOGIN_MAX_ATTEMPTS
+
+
+def _record_login_failure(key):
+    with _login_attempts_lock:
+        _login_attempts.setdefault(key, []).append(time.monotonic())
+
+
+def _record_login_success(key):
+    with _login_attempts_lock:
+        _login_attempts.pop(key, None)
 
 def validate_password(password):
     """
@@ -93,6 +130,20 @@ def unauthorized_json():
     }
     return jsonify(resp)
 
+def shop_access_error():
+    """None if the requester has shop access (public shop, or authenticated user with
+    shop_access); otherwise the Flask response to return instead.
+
+    Shared by routes that follow the shop's access policy but render their own template,
+    so they can't just be wrapped in @access_required('shop') like the shop routes are."""
+    if not get_settings()['shop']['public'] and admin_account_created():
+        if not current_user.is_authenticated:
+            return login_manager.unauthorized()
+        if not current_user.has_shop_access():
+            return 'Forbidden', 403
+    return None
+
+
 def access_required(access: str):
     def _access_required(f):
         @wraps(f)
@@ -112,27 +163,11 @@ def access_required(access: str):
     return _access_required
 
 
-def roles_required(roles: list, require_all=False):
-    def _roles_required(f):
-        @wraps(f)
-        def decorated_view(*args, **kwargs):
-            if not roles:
-                raise ValueError('Empty list used when requiring a role.')
-            if not current_user.is_authenticated:
-                return login_manager.unauthorized()
-            if require_all and not all(current_user.has_role(role) for role in roles):
-                return 'Forbidden', 403
-            elif not require_all and not any(current_user.has_role(role) for role in roles):
-                return 'Forbidden', 403
-            return f(*args, **kwargs)
-
-        return decorated_view
-
-    return _roles_required
-
 def basic_auth(request):
     success = True
-    error = ''
+    # Deliberately identical for "unknown user" and "wrong password": distinguishing
+    # them lets a caller enumerate valid usernames against this endpoint.
+    error = 'Invalid credentials.'
     user = None
 
     auth = request.authorization
@@ -146,11 +181,11 @@ def basic_auth(request):
     user = User.query.filter_by(user=username).first()
     if user is None:
         success = False
-        error = f'Unknown user {username}.'
-    
+        logger.info(f'Basic auth failed: unknown user {username}.')
+
     elif not check_password_hash(user.password, password):
         success = False
-        error = f'Incorrect password for user {username}.'
+        logger.info(f'Basic auth failed: incorrect password for user {username}.')
 
     return success, error, user
 
@@ -235,6 +270,12 @@ def login():
     password = request.form.get('password')
     remember = bool(request.form.get('remember'))
     next_url = request.args.get('next', '')
+    ip = client_address(request)
+
+    if _login_rate_limited(ip):
+        logger.warning(f'Login rate-limited for {ip}')
+        activity.record_login(username, success=False, ip=ip, detail='rate limited')
+        return redirect(url_for('auth.login'))
 
     user = User.query.filter_by(user=username).first()
 
@@ -242,13 +283,15 @@ def login():
     # take the user-supplied password, hash it, and compare it to the hashed password in the database
     if not user or not check_password_hash(user.password, password):
         logger.warning(f'Incorrect login for user {username}')
-        activity.record_login(username, success=False, ip=client_address(request),
+        _record_login_failure(ip)
+        activity.record_login(username, success=False, ip=ip,
                               detail='invalid credentials')
         return redirect(url_for('auth.login')) # if the user doesn't exist or password is wrong, reload the page
 
     # if the above check passes, then we know that the user has the right credentials
     logger.info(f'Sucessfull login for user {username}')
-    activity.record_login(username, success=True, ip=client_address(request))
+    _record_login_success(ip)
+    activity.record_login(username, success=True, ip=ip)
     login_user(user, remember=remember)
 
     return redirect(next_url if len(next_url) else '/')
@@ -273,19 +316,33 @@ def get_users():
 @access_required('admin')
 def delete_user():
     success = True
+    error = None
     data = request.json
     user_id = data['user_id']
     try:
-        User.query.filter_by(id=user_id).delete()
-        db.session.commit()
-        logger.info(f'Successfully deleted user with id {user_id}.')
+        user = User.query.filter_by(id=user_id).first()
+        if user is None:
+            success = False
+            error = 'User not found.'
+        elif user.admin_access and User.query.filter_by(admin_access=True).count() <= 1:
+            # Deleting the last admin would drop admin_account_created() to 0, which
+            # disables access_required() for every route (including signup) app-wide.
+            success = False
+            error = 'Cannot delete the last remaining admin account.'
+        else:
+            User.query.filter_by(id=user_id).delete()
+            db.session.commit()
+            logger.info(f'Successfully deleted user with id {user_id}.')
     except Exception as e:
         logger.error(f'Could not delete user with id {user_id}: {e}')
         success = False
+        error = str(e)
 
     resp = {
         'success': success
-    } 
+    }
+    if error:
+        resp['error'] = error
     return jsonify(resp)
 
 @auth_blueprint.route('/api/user/signup', methods=['POST'])

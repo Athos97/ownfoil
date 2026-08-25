@@ -171,7 +171,20 @@ def task_display_name(task_name, input_data):
 
 
 # --- Progress ---
-_current_task_id = None
+# Thread-local rather than a plain module global: today each TaskWorker process runs
+# tasks strictly one at a time on a single thread, but nothing enforces that invariant,
+# and a plain global would silently corrupt parent/child attribution the moment two
+# tasks ever ran concurrently within one worker process (e.g. a future thread pool).
+import threading as _threading
+_task_local = _threading.local()
+
+
+def get_current_task_id():
+    return getattr(_task_local, 'task_id', None)
+
+
+def set_current_task_id(task_id):
+    _task_local.task_id = task_id
 
 
 def _task_progress(task_id):
@@ -237,14 +250,15 @@ def create_child_task(parent_id, task_name, input_data=None):
 
 def enqueue_or_child(task_name, input_data=None):
     """Create as child of the running task, or top-level if called outside a task."""
-    if _current_task_id is not None:
-        return create_child_task(_current_task_id, task_name, input_data)
+    current = get_current_task_id()
+    if current is not None:
+        return create_child_task(current, task_name, input_data)
     return enqueue_task(task_name, input_data)[0].id
 
 
 def set_waiting_for_children():
     """Mark the current task as waiting for its children to complete."""
-    task = db.session.get(Task, _current_task_id)
+    task = db.session.get(Task, get_current_task_id())
     task.status = 'waiting_for_children'
     task.worker_id = None
     db.session.commit()
@@ -258,97 +272,124 @@ def on_task_completed(task_id, parent_id):
 
 
 def _try_complete_parent(parent_id):
-    """Atomically update parent progress and complete if all children are done."""
-    connection = db.engine.raw_connection()
-    try:
-        cursor = connection.cursor()
-        cursor.execute("BEGIN IMMEDIATE")
+    """Atomically update parent progress and complete if all children are done.
 
-        cursor.execute("SELECT status, task_name, input_json, parent_id FROM tasks WHERE id = ?", (parent_id,))
-        row = cursor.fetchone()
-        if not row or row[0] != 'waiting_for_children':
-            connection.commit()
-            return
-        grandparent_id = row[3]
-
-        # Count children atomically under the lock
-        cursor.execute("SELECT COUNT(*) FROM tasks WHERE parent_id = ?", (parent_id,))
-        total = cursor.fetchone()[0]
-        cursor.execute(
-            "SELECT COUNT(*) FROM tasks WHERE parent_id = ? AND status IN ('completed', 'failed')",
-            (parent_id,)
-        )
-        done = cursor.fetchone()[0]
-        pct = int(done * 100 / total) if total else 0
-
-        if done < total:
-            cursor.execute("UPDATE tasks SET completion_pct = ? WHERE id = ?", (pct, parent_id))
-            connection.commit()
-            return
-
-        # All children done — mark parent complete
-        now = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-        cursor.execute(
-            "UPDATE tasks SET status = 'completed', completion_pct = 100, exit_code = 0, completed_at = ? WHERE id = ?",
-            (now, parent_id)
-        )
-        connection.commit()
-
-        # The parent's terminal outcome is history too; its children recorded
-        # their own rows as they finished.
+    The counting/completing step runs under with_lock_retry like every other
+    BEGIN IMMEDIATE helper in this module: it is the *only* trigger that ever
+    re-checks a parent (a sibling completing), so a transient 'database is
+    locked' here — previously unretried — could strand the parent in
+    waiting_for_children forever, until the next app restart's cleanup_tasks()
+    swept it.
+    """
+    def _txn():
+        connection = db.engine.raw_connection()
         try:
-            from db import record_task_history
+            cursor = connection.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+
+            cursor.execute("SELECT status, task_name, input_json, parent_id FROM tasks WHERE id = ?", (parent_id,))
+            row = cursor.fetchone()
+            if not row or row[0] != 'waiting_for_children':
+                connection.commit()
+                return None
+            grandparent_id = row[3]
+
+            # Count children atomically under the lock
+            cursor.execute("SELECT COUNT(*) FROM tasks WHERE parent_id = ?", (parent_id,))
+            total = cursor.fetchone()[0]
             cursor.execute(
-                "SELECT task_name, input_json, started_at FROM tasks WHERE id = ?",
-                (parent_id,))
-            prow = cursor.fetchone()
-            if prow:
-                display = task_display_name(prow[0],
-                                            json.loads(prow[1]) if prow[1] else {})
-                # Raw cursors hand back DateTime columns as strings; the ORM
-                # column would reject them and drop the whole history row.
-                started = prow[2]
-                if isinstance(started, str):
-                    try:
-                        started = datetime.datetime.strptime(
-                            started[:19], '%Y-%m-%d %H:%M:%S')
-                    except ValueError:
-                        started = None
-                record_task_history(parent_id, prow[0], display, 'completed',
-                                    started_at=started)
-        except Exception as hist_e:
-            logger.warning(f"Parent history write for {parent_id} failed: {hist_e}")
+                "SELECT COUNT(*) FROM tasks WHERE parent_id = ? AND status IN ('completed', 'failed')",
+                (parent_id,)
+            )
+            done = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT COUNT(*) FROM tasks WHERE parent_id = ? AND status = 'failed'",
+                (parent_id,)
+            )
+            failed = cursor.fetchone()[0]
+            pct = int(done * 100 / total) if total else 0
 
-        # Run continuation outside the transaction
-        task_name = row[1]
-        continuation = TASK_CONTINUATIONS.get(task_name)
-        if continuation:
-            input_data = json.loads(row[2])
-            try:
-                continuation(**input_data)
-            except Exception as e:
-                # The children all finished - the pass happened. A raising
-                # continuation (e.g. a sync against a down qBittorrent) must not
-                # leave the parent row behind forever or break the delete below.
-                logger.error(f"Continuation of {task_name} (task {parent_id}) failed: {e}")
+            if done < total:
+                cursor.execute("UPDATE tasks SET completion_pct = ? WHERE id = ?", (pct, parent_id))
+                connection.commit()
+                return None
 
-        # Delete parent and its children
+            # All children done — mark parent complete
+            now = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+            cursor.execute(
+                "UPDATE tasks SET status = 'completed', completion_pct = 100, exit_code = 0, completed_at = ? WHERE id = ?",
+                (now, parent_id)
+            )
+            connection.commit()
+            return row[1], row[2], grandparent_id, failed, total
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    result = with_lock_retry(_txn)
+    if result is None:
+        return
+    task_name, input_json, grandparent_id, failed, total = result
+
+    # The parent's terminal outcome is history too; its children recorded their own
+    # rows as they finished. A batch with any failed child is recorded distinctly
+    # (not plain 'completed') so the history tab doesn't read as a clean success for
+    # a partially-failed pass - the live children rows are gone by the time this is
+    # visible (deleted below), so history is the only lasting trace.
+    try:
+        from db import record_task_history
+        connection = db.engine.raw_connection()
         try:
-            Task.query.filter_by(parent_id=parent_id).delete()
-            Task.query.filter_by(id=parent_id).delete()
-            db.session.commit()
-        except Exception as e:
-            db.session.rollback()
-            logger.error(f"Deleting completed parent {parent_id} failed: {e}")
+            cursor = connection.cursor()
+            cursor.execute("SELECT started_at FROM tasks WHERE id = ?", (parent_id,))
+            prow = cursor.fetchone()
+        finally:
+            connection.close()
+        display = task_display_name(task_name, json.loads(input_json) if input_json else {})
+        # Raw cursors hand back DateTime columns as strings; the ORM column would
+        # reject them and drop the whole history row.
+        started = prow[0] if prow else None
+        if isinstance(started, str):
+            try:
+                started = datetime.datetime.strptime(started[:19], '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                started = None
+        if failed:
+            record_task_history(parent_id, task_name, display, 'completed_with_errors',
+                                error=f'{failed} of {total} sub-task(s) failed',
+                                started_at=started)
+        else:
+            record_task_history(parent_id, task_name, display, 'completed',
+                                started_at=started)
+    except Exception as hist_e:
+        logger.warning(f"Parent history write for {parent_id} failed: {hist_e}")
 
-        # Propagate completion up the chain
-        if grandparent_id:
-            _try_complete_parent(grandparent_id)
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+    # Run continuation outside the transaction
+    continuation = TASK_CONTINUATIONS.get(task_name)
+    if continuation:
+        input_data = json.loads(input_json)
+        try:
+            continuation(**input_data)
+        except Exception as e:
+            # The children all finished - the pass happened. A raising
+            # continuation (e.g. a sync against a down qBittorrent) must not
+            # leave the parent row behind forever or break the delete below.
+            logger.error(f"Continuation of {task_name} (task {parent_id}) failed: {e}")
+
+    # Delete parent and its children
+    try:
+        Task.query.filter_by(parent_id=parent_id).delete()
+        Task.query.filter_by(id=parent_id).delete()
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Deleting completed parent {parent_id} failed: {e}")
+
+    # Propagate completion up the chain
+    if grandparent_id:
+        _try_complete_parent(grandparent_id)
 
 
 # --- Cancellation ---
@@ -438,7 +479,14 @@ def cancel_task(task_id):
     if worker_id is not None:
         import app as app_mod
         if app_mod.pool is not None:
-            app_mod.pool.restart_worker(worker_id)
+            try:
+                app_mod.pool.restart_worker(worker_id)
+            except Exception as e:
+                # Must not skip the cleanup hook / parent re-check below: a raise
+                # here used to abort cancel_task entirely, leaking the task's
+                # cleanup side-effects (e.g. a Download row stuck 'downloading')
+                # and potentially stranding its parent in waiting_for_children.
+                logger.error(f"Failed to restart worker {worker_id} while cancelling task {task_id}: {e}")
 
     if task_name is not None:
         _run_cleanup_hook(task_name, input_json)
@@ -760,7 +808,7 @@ def downloader_torrents_run_task(**kwargs):
     settings = get_settings()
     try:
         downloader_lib.run_downloader_job(
-            settings, progress=_task_progress(_current_task_id))
+            settings, progress=_task_progress(get_current_task_id()))
     except Exception:
         update_scheduled_task('downloader_torrents_run',
                               datetime.datetime.utcnow() + DOWNLOADER_RETRY_DELAY)
@@ -837,9 +885,11 @@ def ghosteshop_download_task(app_id, app_version, name=None, **kwargs):
     (visible on the Downloads page) rather than raising - a missing catalog
     entry is an expected outcome, not a task crash."""
     settings = get_settings()
+    current_task_id = get_current_task_id()
     downloader_lib.download_ghosteshop_row(app_id, str(app_version),
                                            settings=settings,
-                                           task_id=_current_task_id)
+                                           task_id=current_task_id,
+                                           progress=_task_progress(current_task_id))
 
 
 @register_cleanup(downloader_lib.GHOSTESHOP_DOWNLOAD_TASK)
@@ -1172,7 +1222,7 @@ def verify_file_task(file_id, **kwargs):
     depth = opts['depth']
     logger.info(f'Verifying file ({depth}): {file_obj.filename}')
     signature_valid, hash_valid, hash_modified, error = verification_lib.verify(
-        file_obj.filepath, depth, progress=_task_progress(_current_task_id))
+        file_obj.filepath, depth, progress=_task_progress(get_current_task_id()))
 
     file_obj.signature_valid = signature_valid
     if hash_valid is not None:
@@ -1243,7 +1293,7 @@ def compress_file_task(file_id, **kwargs):
     opts = get_settings()['library']['management']['compression']
     if not opts['enabled']:
         return
-    progress = _task_progress(_current_task_id)
+    progress = _task_progress(get_current_task_id())
     if _convert_file(file_obj,
                      lambda source, out_dir: compression.compress_to(source, out_dir, opts, progress=progress),
                      COMPRESS_EXT[file_obj.extension], True):
@@ -1258,7 +1308,7 @@ def decompress_file_task(file_id, **kwargs):
         return
     if not os.path.exists(file_obj.filepath):
         return
-    progress = _task_progress(_current_task_id)
+    progress = _task_progress(get_current_task_id())
     _convert_file(file_obj,
                   lambda source, out_dir: compression.decompress_to(source, out_dir, progress=progress),
                   DECOMPRESS_EXT[file_obj.extension], False)

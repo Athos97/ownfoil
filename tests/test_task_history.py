@@ -177,3 +177,28 @@ def test_parent_completion_history_parses_raw_cursor_dates(env):
     assert any(r.task_id == parent_id and r.status == 'completed'
                and r.duration_ms is not None for r in rows), \
         "the parent's history row carries its parsed start time"
+
+
+def test_parent_completion_with_a_failed_child_is_recorded_distinctly(env):
+    """A batch where every child reaches a terminal state, but not all of them
+    successfully, used to record the parent as plain 'completed' - a clean tick
+    in the history tab for a pass that partially failed. The live child rows
+    are deleted the moment the parent completes, so this history row is the
+    only lasting trace of the failure."""
+    parent = Task(task_name='downloader_ghosteshop_run', status='waiting_for_children',
+                  input_hash='h', input_json='{}')
+    db.session.add(parent)
+    db.session.flush()
+    db.session.add(Task(task_name='ghosteshop_download', status='completed',
+                        input_hash='hc1', input_json='{}', parent_id=parent.id))
+    db.session.add(Task(task_name='ghosteshop_download', status='failed',
+                        input_hash='hc2', input_json='{}', parent_id=parent.id))
+    db.session.commit()
+    parent_id = parent.id
+
+    tasks_mod._try_complete_parent(parent_id)
+
+    rows = _history()
+    row = next(r for r in rows if r.task_id == parent_id)
+    assert row.status == 'completed_with_errors'
+    assert row.error == '1 of 2 sub-task(s) failed'

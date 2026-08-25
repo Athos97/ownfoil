@@ -74,10 +74,12 @@ def get_missing_targets():
     source should ever search for or download them."""
     targets = []
     blacklisted = get_blacklisted_app_ids()
-    titles = get_all_titles()
-    for title in titles:
-        title_id = title.title_id
-        apps = get_all_title_apps(title_id)
+    # One query for every app rather than one get_all_title_apps() round trip per
+    # title: titles with no apps never had anything to contribute below anyway.
+    apps_by_title = {}
+    for app in get_all_apps():
+        apps_by_title.setdefault(app['title_id'], []).append(app)
+    for title_id, apps in apps_by_title.items():
         base_info = titles_lib.get_game_info(title_id) or {}
         base_name = base_info.get('name') or title_id
 
@@ -376,12 +378,17 @@ class TransferCancelled(ghostshop.GhostshopError):
     """The task driving this transfer was cancelled - abort the transfer."""
 
 
-def _make_progress_cb(row_id, task_id=None):
+def _make_progress_cb(row_id, task_id=None, task_progress=None):
     """Throttled DB updates of the download row's progress percentage.
 
     With a task_id, also watches for cooperative cancellation: a cancelled task
     row disappears from the table, and noticing that aborts the transfer mid-
-    stream instead of letting it run to completion orphaned."""
+    stream instead of letting it run to completion orphaned.
+
+    With task_progress (typically tasks._task_progress(task_id)), the same
+    percentage is mirrored onto the driving Task row's completion_pct, so the
+    Tasks page shows real transfer progress instead of sitting at 0% (rendered
+    as a fake animated bar) for the whole download."""
     last = [0.0]
     ticks = [0]
 
@@ -398,6 +405,8 @@ def _make_progress_cb(row_id, task_id=None):
             _raise_if_task_cancelled(task_id)
         pct = int(done * 100 / total) if total else 0
         update_download(row_id, progress=pct)
+        if task_progress is not None:
+            task_progress(pct)
 
     return cb
 
@@ -413,11 +422,13 @@ def _raise_if_task_cancelled(task_id):
         raise TransferCancelled('cancelled by user')
 
 
-def download_target_ghosteshop(target, settings, existing_row=None, task_id=None):
+def download_target_ghosteshop(target, settings, existing_row=None, task_id=None, progress=None):
     """Download one target straight from Ghost eShop into its game folder.
 
     With a task_id, the transfer aborts cooperatively when that task row is
-    cancelled (deleted) mid-stream."""
+    cancelled (deleted) mid-stream. With progress, the driving task's
+    completion_pct is kept in sync with the actual transfer, not just the
+    Download row's."""
     ghost = _ghost_settings(settings)
 
     common = dict(
@@ -501,7 +512,7 @@ def download_target_ghosteshop(target, settings, existing_row=None, task_id=None
         ghostshop.net.download_chunked(
             session, info, destination, expected_size=entry.size,
             headers=provider.chunk_headers(link),
-            on_progress=_make_progress_cb(row.id, task_id=task_id))
+            on_progress=_make_progress_cb(row.id, task_id=task_id, task_progress=progress))
         provider.download_complete(session, link)
         update_download(row.id, progress=100)
         logger.info(f"[ghosteshop] Downloaded {entry.name}")
@@ -652,6 +663,7 @@ def _gc_orphan_part_files():
     """Delete .part/.part.state files whose download row is gone or completed:
     the resume machinery leaves them behind when a target is deleted, fails
     permanently, or completes by other means."""
+    from itertools import islice
     from pathlib import Path as _Path
     roots = {os.path.dirname(p) or '/' for p in _ghost_library_roots()}
     live_keys = set()
@@ -661,7 +673,9 @@ def _gc_orphan_part_files():
     removed = 0
     for root in roots:
         try:
-            candidates = list(_Path(root).rglob('*.part'))[:500]
+            # islice stops the walk itself at 500 matches; list(rglob(...))[:500]
+            # would walk the whole tree first and only slice afterwards.
+            candidates = list(islice(_Path(root).rglob('*.part'), 500))
         except OSError:
             continue
         for part in candidates:
@@ -749,7 +763,7 @@ def prepare_ghosteshop_targets(settings=None):
 
 
 def download_ghosteshop_row(app_id, app_version, name=None, title_id=None,
-                            app_type=None, settings=None, task_id=None):
+                            app_type=None, settings=None, task_id=None, progress=None):
     """Download one target via Ghost eShop - the body of the per-file io task.
 
     The downloads row drives the flow: a foreign-lane row is a no-op, an owned
@@ -785,7 +799,7 @@ def download_ghosteshop_row(app_id, app_version, name=None, title_id=None,
         return True
     target = rebuild_target_from_download(row)
     return download_target_ghosteshop(target, settings, existing_row=row,
-                                      task_id=task_id)
+                                      task_id=task_id, progress=progress)
 
 
 # ---------------------------------------------------------------- torrents pass
@@ -978,12 +992,13 @@ def _delete_ghost_parts_for(d):
     would misinterpret. Returns how many files went."""
     if (d.source or SOURCE_TORRENTS) != SOURCE_GHOSTESHOP or not d.torrent_name:
         return 0
+    from itertools import islice
     from pathlib import Path as _Path
     wanted = {d.torrent_name + '.part', d.torrent_name + '.part.state'}
     removed = 0
     for root in _ghost_library_roots():
         try:
-            candidates = list(_Path(root).rglob('*.part*'))[:500]
+            candidates = list(islice(_Path(root).rglob('*.part*'), 500))
         except OSError:
             continue
         for path in candidates:

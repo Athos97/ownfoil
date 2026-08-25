@@ -1,3 +1,9 @@
+/** HTML-escape a value for safe interpolation into innerHTML/template-string markup. */
+function escHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g,
+        c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+}
+
 /** Byte counts as a human-readable string. Binary units, so the numbers agree with
  *  what a file manager reports rather than with the disk vendor's arithmetic. */
 function formatBytes(bytes) {

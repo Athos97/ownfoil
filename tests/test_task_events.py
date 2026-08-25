@@ -290,8 +290,10 @@ class FakeProcess:
 def pool(monkeypatch):
     import app as app_mod
 
-    fake = type("Pool", (), {"workers": {1: (FakeProcess(101), None),
-                                         2: (FakeProcess(102, alive=False), None)}})()
+    fake = type("Pool", (), {
+        "workers": {1: (FakeProcess(101), None), 2: (FakeProcess(102, alive=False), None)},
+        "snapshot": lambda self: dict(self.workers),
+    })()
     monkeypatch.setattr(app_mod, "pool", fake)
     return fake
 

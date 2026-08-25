@@ -110,13 +110,13 @@
           ],
           [
             "Content-Length",
-            "63"
+            "64"
           ]
         ],
         "body": {
           "kind": "json",
           "json": {
-            "error": "Shop requires authentication.\nUnknown user ghost."
+            "error": "Shop requires authentication.\nInvalid credentials."
           }
         }
       },

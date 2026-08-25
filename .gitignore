@@ -12,6 +12,7 @@ tests/capture/.workdir
 # venv
 /bin
 /venv
+/.venv
 /include
 /lib
 /lib64

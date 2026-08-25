@@ -363,7 +363,10 @@
             tagsContainer.append(baseBadge);
 
             if (game.has_latest_version !== undefined) {
-                const versionBadge = $(`<span class="badge rounded-pill game-tag version-tag" title="${game.name} updates"></span>`)
+                // title set via .attr(), not interpolated into the HTML string: game.name
+                // comes from titledb/admin overrides and must never be HTML-parsed.
+                const versionBadge = $('<span class="badge rounded-pill game-tag version-tag"></span>')
+                    .attr('title', `${game.name} updates`)
                     .addClass(`text-bg-${game.has_latest_version ? 'success' : 'warning'}`)
                     .html(`<i class="bi ${game.has_latest_version ? 'bi-check-circle-fill' : 'bi-arrow-down-circle'}"></i>`);
                 versionBadge.attr("data-bs-toggle", "tooltip")

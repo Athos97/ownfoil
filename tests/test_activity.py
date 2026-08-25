@@ -70,6 +70,34 @@ def test_web_login_records_success_and_failure(web):
     assert events == [('login_failed', 'alice'), ('login', 'alice')]
 
 
+def test_web_login_rate_limits_repeated_failures_by_ip(web, monkeypatch):
+    """After LOGIN_MAX_ATTEMPTS failures from the same IP, even the right
+    password is refused until the window passes - and a different IP is
+    unaffected, since the limiter is keyed by IP, not username."""
+    from werkzeug.security import generate_password_hash
+    import auth as auth_mod
+    monkeypatch.setattr(auth_mod, '_login_attempts', {})
+    db.session.add(User(user='alice', password=generate_password_hash('right'),
+                        admin_access=True, shop_access=True, backup_access=True))
+    db.session.commit()
+
+    client = web.test_client()
+    for _ in range(auth_mod.LOGIN_MAX_ATTEMPTS):
+        client.post('/login', data={'user': 'alice', 'password': 'wrong'})
+    client.post('/login', data={'user': 'alice', 'password': 'right'})
+
+    events = ActivityEvent.query.order_by(ActivityEvent.id).all()
+    assert len(events) == auth_mod.LOGIN_MAX_ATTEMPTS + 1
+    assert all(e.kind == 'login_failed' for e in events)
+    assert events[-1].detail == 'rate limited'
+
+    # A different client (distinct X-Forwarded-For) is a different rate-limit
+    # key and logs in normally.
+    resp = client.post('/login', data={'user': 'alice', 'password': 'right'},
+                       headers={'X-Forwarded-For': '203.0.113.5'})
+    assert ActivityEvent.query.order_by(ActivityEvent.id.desc()).first().kind == 'login'
+
+
 # --- GraphQL read ---
 
 def test_activity_query_lists_newest_first(web):

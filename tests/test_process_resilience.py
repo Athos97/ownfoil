@@ -149,6 +149,48 @@ def test_claim_skips_running_rows_of_dead_workers(library, monkeypatch):
     assert tw.claim_task() is None
 
 
+class ExplodingPool:
+    """A pool whose restart_worker always raises, standing in for a transient
+    failure (e.g. a lock timeout) while a worker process is being replaced."""
+    def restart_worker(self, worker_id):
+        raise RuntimeError('boom')
+
+
+def test_cancel_survives_a_worker_restart_failure(library, monkeypatch):
+    """cancel_task used to let a restart_worker exception escape uncaught,
+    skipping the cleanup hook and the parent re-check that follow it - leaking
+    the task's cleanup side-effects and potentially stranding its parent in
+    waiting_for_children. A restart failure must not stop cancellation."""
+    import app as app_mod
+    from db import record_task_history  # noqa: F401 (imported for readability)
+
+    cleaned_up = []
+    monkeypatch.setitem(tasks_mod.TASK_CLEANUP, 'ghosteshop_download',
+                        lambda **kw: cleaned_up.append(kw))
+
+    parent = Task(task_name='downloader_ghosteshop_run', status='waiting_for_children',
+                 input_hash='hp', input_json='{}')
+    db.session.add(parent)
+    db.session.flush()
+    child = Task(task_name='ghosteshop_download', status='running', worker_id=7,
+                parent_id=parent.id, input_hash='hc',
+                input_json='{"app_id": "x", "app_version": "1"}')
+    db.session.add(child)
+    db.session.commit()
+    parent_id, child_id = parent.id, child.id
+
+    monkeypatch.setattr(app_mod, 'pool', ExplodingPool())
+
+    assert tasks_mod.cancel_task(child_id)
+
+    assert cleaned_up == [{"app_id": "x", "app_version": "1"}]
+    # The child is gone and was the parent's only child, so the parent - whose
+    # completion re-check must still have run despite the restart failure -
+    # completed right behind it instead of being stranded.
+    assert db.session.get(Task, child_id) is None
+    assert db.session.get(Task, parent_id) is None
+
+
 # --- F4: cooperative cancellation aborts the transfer ---
 
 def test_transfer_aborts_when_task_row_disappears(library, portal, tmp_path, monkeypatch):
@@ -176,6 +218,24 @@ def test_transfer_aborts_when_task_row_disappears(library, portal, tmp_path, mon
 
     with pytest.raises(downloader_lib.TransferCancelled):
         cb(500, 1000)  # row gone: abort
+
+
+def test_progress_cb_mirrors_onto_the_driving_task(library, monkeypatch):
+    """A ghosteshop_download task's completion_pct used to sit at 0% for the
+    whole transfer (verify_file/compress_file were the only task types that
+    reported real progress) - the Tasks page papered over it with a fake
+    full-width animated bar. task_progress must receive the same percentage
+    _make_progress_cb writes onto the Download row."""
+    row = downloader_lib.queue_ghosteshop_download(
+        title_id=ZELDA_TID, app_id=ZELDA_UPD_TID, app_version='1114112',
+        app_type='UPDATE', name='Zelda BOTW')
+
+    reported = []
+    cb = downloader_lib._make_progress_cb(row.id, task_progress=reported.append)
+    cb(50, 100)  # first call: elapsed-since-last-write is huge, so this always writes
+
+    assert reported == [50]
+    assert get_download_by_id(row.id).progress == 50
 
 
 # --- F7: startup requeues mid-transfer rows ---
