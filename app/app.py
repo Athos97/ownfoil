@@ -753,8 +753,10 @@ def serve_game(id):
     # them, and a range past the end of the file raises out of here without transferring.
     response = send_from_directory(filedir, filename)
     counted = increment_download_count_throttled(filepath, client_address(request))
+    client = get_client_for_request(request)
     activity.record_download(
-        request, filepath, size=file_size, client_name=None,
+        request, filepath, size=file_size,
+        client_name=client.CLIENT_NAME if client else None,
         username=(request.authorization.username if request.authorization else None),
         counted=bool(counted))
     return response

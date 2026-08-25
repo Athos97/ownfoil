@@ -9,13 +9,19 @@ import types
 
 import pytest
 
-from db import Files
+from db import ActivityEvent, Files
 from settings import set_shop_settings
 
 FILENAME = "Test Game [0100000000010000][v0].nsp"
 SPHAIRA_PATH = f"/Test Game/{FILENAME}"
 # What identifies Sphaira: without it the shop route serves the Web UI instead.
 SPHAIRA_HEADERS = {"User-Agent": "Sphaira/1.0.6"}
+# What identifies CyberFoil (see clients/cyberfoil.py) - the get_game route is the
+# same one Tinfoil/CyberFoil shop listings link to.
+CYBERFOIL_HEADERS = {
+    "Theme": "0", "Uid": "0", "Version": "0", "Revision": "0",
+    "Language": "en", "Hauth": "0", "Uauth": "0", "User-Agent": "cyberfoil",
+}
 
 # Two people behind the same reverse proxy: identical remote_addr, different real address.
 PROXIED = [{"X-Forwarded-For": "203.0.113.7"}, {"X-Forwarded-For": "203.0.113.8"}]
@@ -107,3 +113,14 @@ def test_a_range_past_the_end_of_the_file_is_never_counted(shop, download):
     """Clients probe a file with a Range before taking it; a refused probe is no download."""
     assert download({"Range": "bytes=61440-61443"}).status_code == 416
     assert count(shop) == 0
+
+
+def test_get_game_download_records_the_identified_client(shop):
+    """/api/get_game is the URL Tinfoil/CyberFoil shop listings link to (unlike Sphaira,
+    which serves its own route) - the activity log must say which one, not nothing, or
+    every download through it reads as client-less in the Activity page."""
+    resp = get_game_download(shop, headers=CYBERFOIL_HEADERS)
+    assert resp.status_code == 200
+    with shop.app.app_context():
+        event = ActivityEvent.query.filter_by(kind='download').first()
+        assert event.client == 'cyberfoil'
