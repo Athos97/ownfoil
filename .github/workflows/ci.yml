@@ -69,13 +69,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Publish only from the deployment branch and release tags; everything
-      # else (feature branches, PRs) builds both platforms as a smoke check
-      # without touching the registry.
+      # Publish from the production branch, the staging branch (its own image
+      # tag, for testing a build before it reaches main), and release tags;
+      # everything else (feature branches, PRs) builds both platforms as a
+      # smoke check without touching the registry.
       - name: Decide whether to publish
         id: publish
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* || "$GITHUB_REF" == refs/heads/main ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/* || "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/heads/staging ]]; then
             echo "push=true" >> "$GITHUB_OUTPUT"
           else
             echo "push=false" >> "$GITHUB_OUTPUT"
@@ -92,6 +93,7 @@ jobs:
             type=ref,event=tag
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
             type=ref,event=branch,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/staging' }}
 
       - name: Build (and push) image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
