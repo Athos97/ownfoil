@@ -19,26 +19,7 @@
     <h4 class="mb-3">Sources</h4>
     <div class="row g-3 mb-4" id="sourceCards"></div>
 
-    <h4 class="mb-3">Pending &amp; in flight <span class="text-secondary fw-normal small" id="workCount"></span></h4>
-    <div id="workTable" class="table-responsive">
-        <table class="table table-sm table-hover align-middle">
-            <thead>
-                <tr>
-                    <th scope="col">Game</th>
-                    <th scope="col">Type</th>
-                    <th scope="col">Version</th>
-                    <th scope="col">Source</th>
-                    <th scope="col">Progress</th>
-                    <th scope="col"></th>
-                </tr>
-            </thead>
-            <tbody id="workBody"></tbody>
-        </table>
-    </div>
-    <p id="workEmpty" class="text-secondary fst-italic">Nothing missing and nothing
-        transferring - the library is up to date.</p>
-
-    <h4 class="mb-3 mt-4">Add content</h4>
+    <h4 class="mb-3">Add content</h4>
     <div class="card mb-3">
         <div class="card-header">
             <ul class="nav nav-tabs card-header-tabs" role="tablist">
@@ -104,6 +85,25 @@
             </div>
         </div>
     </div>
+
+    <h4 class="mb-3 mt-4">Pending &amp; in flight <span class="text-secondary fw-normal small" id="workCount"></span></h4>
+    <div id="workTable" class="table-responsive">
+        <table class="table table-sm table-hover align-middle">
+            <thead>
+                <tr>
+                    <th scope="col">Game</th>
+                    <th scope="col">Type</th>
+                    <th scope="col">Version</th>
+                    <th scope="col">Source</th>
+                    <th scope="col">Progress</th>
+                    <th scope="col"></th>
+                </tr>
+            </thead>
+            <tbody id="workBody"></tbody>
+        </table>
+    </div>
+    <p id="workEmpty" class="text-secondary fst-italic">Nothing missing and nothing
+        transferring - the library is up to date.</p>
 
 </div>
 {% endblock %}
