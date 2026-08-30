@@ -303,6 +303,8 @@ class GhostshopSearchResult:
         "Square art for the list entry. The portal's search does not carry art, "
         "so this is ownfoil's own titledb icon for the title id - null when "
         "titledb does not know the game.", default=None)
+    region: Optional[str] = desc(
+        "Region code from titledb (e.g. 'US', 'ES', 'JP').", default=None)
 
 
 @described(strawberry.type)

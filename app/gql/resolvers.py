@@ -1363,9 +1363,11 @@ def resolve_ghostshop_search(query: str, limit: int,
         return []
     out = []
     for r in results[:max(1, min(limit, 50))]:
-        info_rec = titles_lib.get_game_info(r.tid) or {}
+        title_rec = titles_lib.get_title_record(r.tid) or {}
         out.append(GhostshopSearchResult(
-            tid=r.tid, title=r.title, icon_url=info_rec.get('iconUrl') or None))
+            tid=r.tid, title=r.title,
+            icon_url=title_rec.get('iconUrl') or None,
+            region=title_rec.get('region') or None))
     return out
 
 

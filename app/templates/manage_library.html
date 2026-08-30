@@ -385,7 +385,7 @@
 
     const GHOST_SEARCH_QUERY = `
         query GhostSearch($query: String!) {
-            ghostshopSearch(query: $query) { tid title iconUrl }
+            ghostshopSearch(query: $query) { tid title iconUrl region }
         }`;
 
     const GHOST_GAME_QUERY = `
@@ -433,11 +433,16 @@
                 : `<span class="flex-shrink-0 d-flex align-items-center justify-content-center rounded bg-body-secondary"
                        style="width: 2.4rem; height: 2.4rem;">
                        <i class="bi bi-controller text-secondary"></i></span>`;
+            const regionBadge = r.region
+                ? `<span class="badge text-bg-light text-dark ms-1">${esc(r.region)}</span>`
+                : '';
             btn.innerHTML = `
                 ${icon}
                 <div class="flex-grow-1 text-truncate">
                     <div class="fw-semibold text-truncate"></div>
-                    <div class="text-secondary small font-monospace text-truncate"></div>
+                    <div class="text-secondary small text-truncate">
+                        <span class="font-monospace"></span>${regionBadge}
+                    </div>
                 </div>`;
             btn.querySelector('.fw-semibold').textContent = r.title;
             btn.querySelector('.font-monospace').textContent = r.tid;

@@ -20,6 +20,7 @@ version_regex = r"\[v(\d+)\]"
 # Re-export titledb.store query functions so existing callers
 # (titles_lib.get_game_info, titles_lib.get_all_existing_versions, ...) keep working.
 get_game_info = titledb.store.get_game_info
+get_title_record = titledb.store.get_title_record
 get_all_existing_versions = titledb.store.get_all_existing_versions
 get_all_app_existing_versions = titledb.store.get_all_app_existing_versions
 get_all_existing_dlc = titledb.store.get_all_existing_dlc
