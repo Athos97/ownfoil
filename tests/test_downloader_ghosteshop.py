@@ -336,6 +336,10 @@ def test_row_tracks_the_version_actually_fetched(library, portal, tmp_path, monk
     assert row.app_version == '1114112', "row re-pointed to the fetched version"
     assert row.progress == 100
     assert (tmp_path / 'Zelda BOTW' / ZELDA_UPD_NAME).is_file()
+    # A real transfer happened, but of a version short of the one titledb knows
+    # about (9999999) - the row must say so, not read as a plain up-to-date
+    # completion once ownership flips it to 'completed'.
+    assert row.note and '9999999' in row.note
 
 
 def test_catalog_best_already_owned_completes_without_downloading(
@@ -360,7 +364,8 @@ def test_catalog_best_already_owned_completes_without_downloading(
     assert ok
     row = Download.query.filter_by(app_id=ZELDA_UPD_TID).one()
     assert row.status == 'completed'
-    assert 'already owned' in row.error
+    assert row.error is None, "this is not a failure - the note explains it"
+    assert 'already' in row.note
     assert list(tmp_path.rglob('*.nsz')) == [], "nothing re-downloaded"
 
 
@@ -390,6 +395,7 @@ def test_catalog_best_older_than_owned_completes_without_downloading(
     assert ok
     row = Download.query.filter_by(app_id=ZELDA_UPD_TID).one()
     assert row.status == 'completed'
-    assert 'newer' in row.error
+    assert row.error is None, "this is not a failure - the note explains it"
+    assert 'older' in row.note
     assert list(tmp_path.rglob('*.nsz')) == [], "nothing downloaded - already have something newer"
     assert list(tmp_path.rglob('*.part')) == []

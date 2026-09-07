@@ -340,7 +340,10 @@ class Download(db.Model):
     which is set from app ownership once the library watcher has identified
     the downloaded file. `source` is which lane owns the row (`torrents` or
     `ghosteshop`): each source retries only its own failures. `progress` is a
-    0-100 percentage for transfers ownfoil drives itself.
+    0-100 percentage for transfers ownfoil drives itself. `note` explains a
+    non-failure outcome worth surfacing (e.g. a source resolved the target
+    without transferring anything, or fetched something short of the newest
+    version known) - `error` stays reserved for actual failures.
     """
     __tablename__ = 'downloads'
 
@@ -360,6 +363,7 @@ class Download(db.Model):
     progress = db.Column(db.Integer)
     status = db.Column(db.String, default='queued', server_default='queued')
     error = db.Column(db.String)
+    note = db.Column(db.String)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.datetime.utcnow,
                            onupdate=datetime.datetime.utcnow)
@@ -872,9 +876,10 @@ def reset_files_organized():
 
 # --- Downloads ---
 
-# Sentinel for update_download(error=...): explicitly clear the column, which a
-# plain None (meaning "field not provided") cannot express.
+# Sentinels for update_download(error=..., note=...): explicitly clear the
+# column, which a plain None (meaning "field not provided") cannot express.
 CLEAR_ERROR = object()
+CLEAR_NOTE = object()
 
 
 def is_app_owned(app_id, app_version):
@@ -950,13 +955,14 @@ def add_download(**kwargs):
 
 def update_download(download_id, **kwargs):
     """Update download-row fields. None values are skipped (callers omit optional
-    fields they don't know); pass CLEAR_ERROR as the value of `error` to null it,
-    since a plain None cannot be distinguished from 'not provided'."""
+    fields they don't know); pass CLEAR_ERROR/CLEAR_NOTE as the value of
+    `error`/`note` to null them, since a plain None cannot be distinguished
+    from 'not provided'."""
     download = get_download_by_id(download_id)
     if not download:
         return
     for key, value in kwargs.items():
-        if value is CLEAR_ERROR:
+        if value is CLEAR_ERROR or value is CLEAR_NOTE:
             value = None
         if value is not None:
             setattr(download, key, value)

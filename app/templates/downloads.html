@@ -189,7 +189,12 @@
             ? ' <span class="spinner-border spinner-border-sm" role="status"></span>' : '';
         const pct = d.status === 'downloading' && d.progress != null
             ? ` ${d.progress}%` : '';
-        return `<span class="badge ${map[d.status] || 'text-bg-secondary'}">${d.status}${pct}${spinner}</span>`;
+        // A completed row with a note resolved without a plain, fully
+        // up-to-date transfer - flag it with the info color instead of green
+        // so it reads differently from a straightforward success at a glance.
+        const cls = (d.status === 'completed' && d.note) ? 'text-bg-info'
+            : (map[d.status] || 'text-bg-secondary');
+        return `<span class="badge ${cls}">${d.status}${pct}${spinner}</span>`;
     }
 
     function esc(s) {
@@ -213,7 +218,7 @@
             <td></td>
             <td></td>
             <td></td>
-            <td><div class="dl-status"></div><div class="text-danger small"></div></td>
+            <td><div class="dl-status"></div><div class="dl-sub small"></div></td>
             <td class="text-secondary"></td>
             <td class="text-end text-nowrap"></td>`;
         return tr;
@@ -235,8 +240,20 @@
         cells[5].textContent = formatSize(d.size);
         cells[6].textContent = d.seeders ?? '—';
         cells[7].querySelector('.dl-status').innerHTML = statusBadge(d);
-        cells[7].querySelector('.text-danger').textContent =
-            d.status === 'failed' ? (d.error || '') : '';
+        const sub = cells[7].querySelector('.dl-sub');
+        if (d.status === 'failed') {
+            sub.className = 'dl-sub small text-danger';
+            sub.textContent = d.error || '';
+        } else if (d.status === 'completed' && d.note) {
+            // Not a failure - a completion the source resolved without a full,
+            // up-to-date transfer (already had it, or the catalog fell short of
+            // the newest version known). Worth a look, not an error.
+            sub.className = 'dl-sub small text-secondary';
+            sub.textContent = d.note;
+        } else {
+            sub.className = 'dl-sub small';
+            sub.textContent = '';
+        }
         cells[8].textContent = d.createdAt
             ? new Date(d.createdAt).toLocaleString() : '';
 

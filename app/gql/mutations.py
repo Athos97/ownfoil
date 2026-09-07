@@ -70,6 +70,7 @@ def _download_row(row) -> Download:
         progress=row.progress,
         status=DownloadStatus(row.status or 'queued'),
         error=row.error,
+        note=row.note,
         created_at=_iso(row.created_at),
         updated_at=_iso(row.updated_at),
     )

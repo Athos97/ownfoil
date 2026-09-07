@@ -16,7 +16,7 @@ MAX_DOWNLOADS = 500
 _DOWNLOAD_SQL = """
 SELECT id, title_id, app_id, app_version, app_type, name, torrent_hash,
        torrent_name, indexer, size, seeders, source, progress, status, error,
-       created_at, updated_at
+       note, created_at, updated_at
 FROM downloads
 ORDER BY id
 LIMIT ?
@@ -44,7 +44,7 @@ def _read_downloads():
     downloads = {}
     for (dl_id, title_id, app_id, app_version, app_type, name, torrent_hash,
          torrent_name, indexer, size, seeders, source, progress, status, error,
-         created_at, updated_at) in rows:
+         note, created_at, updated_at) in rows:
         downloads[dl_id] = {
             'id': dl_id,
             'titleId': title_id,
@@ -61,6 +61,7 @@ def _read_downloads():
             'progress': progress,
             'status': status,
             'error': error,
+            'note': note,
             'createdAt': _utc(created_at),
             'updatedAt': _utc(updated_at),
         }

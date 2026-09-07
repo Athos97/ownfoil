@@ -444,7 +444,8 @@ def download_target_ghosteshop(target, settings, existing_row=None, task_id=None
         row = existing_row or get_download_by_app(
             target.get('app_id'), str(target.get('app_version')))
         if row:
-            update_download(row.id, status='completed', error=CLEAR_ERROR, progress=100)
+            update_download(row.id, status='completed', error=CLEAR_ERROR,
+                            note=CLEAR_NOTE, progress=100)
         return True
 
     # add_download is get-or-create: for a target queued in advance (Add
@@ -483,7 +484,9 @@ def download_target_ghosteshop(target, settings, existing_row=None, task_id=None
             row = add_download(**common, status='downloading', progress=0)
             update_download(row.id, torrent_name=entry.name, indexer='Ghost eShop',
                             size=entry.size, status='completed', progress=100,
-                            error=f'Catalog best is v{entry.version}; already owned')
+                            error=CLEAR_ERROR,
+                            note=f'Nothing to download: Ghost eShop\'s best available '
+                                 f'is v{entry.version}, which is already in the library.')
             logger.info(f"[ghosteshop] {target.get('app_id')}: catalog best "
                         f"v{entry.version} already owned - nothing to do.")
             return True
@@ -496,12 +499,23 @@ def download_target_ghosteshop(target, settings, existing_row=None, task_id=None
             row = add_download(**common, status='downloading', progress=0)
             update_download(row.id, torrent_name=entry.name, indexer='Ghost eShop',
                             size=entry.size, status='completed', progress=100,
-                            error=f'Catalog best is v{entry.version}; already have a newer v{max_owned}')
+                            error=CLEAR_ERROR,
+                            note=f'Nothing to download: Ghost eShop\'s best available '
+                                 f'is v{entry.version}, older than the v{max_owned} '
+                                 f'already in the library.')
             logger.info(f"[ghosteshop] {target.get('app_id')}: catalog best "
                         f"v{entry.version} is older than owned v{max_owned} - nothing to do.")
             return True
         logger.info(f"[ghosteshop] {target.get('app_id')}: requested v{requested_ver} "
                     f"not in catalog, fetching best available v{entry.version}.")
+
+    # Fetching the catalog's best when it falls short of the version titledb
+    # actually knows about is still progress, but not the full story - flag it
+    # so the row doesn't read as a plain, fully up-to-date completion.
+    partial_note = (
+        f'Fetched Ghost eShop\'s best available v{entry.version}; titledb already '
+        f'knows a newer v{requested_ver} the catalog does not have yet.'
+        if entry_ver not in (requested_ver, '0') else None)
 
     row = add_download(**common, status='downloading', progress=0)
     if entry_ver not in (requested_ver, '0'):
@@ -516,7 +530,7 @@ def download_target_ghosteshop(target, settings, existing_row=None, task_id=None
     # add_download returns an existing row untouched, so (re)apply the live fields.
     update_download(row.id, torrent_name=entry.name, indexer='Ghost eShop',
                     size=entry.size, seeders=None, status='downloading',
-                    error=CLEAR_ERROR, progress=0)
+                    error=CLEAR_ERROR, note=partial_note or CLEAR_NOTE, progress=0)
 
     destination = _ghost_destination(entry, target, settings)
     if not destination:
@@ -825,7 +839,8 @@ def download_ghosteshop_row(app_id, app_version, name=None, title_id=None,
                            name=name or app_id, source=SOURCE_GHOSTESHOP,
                            status='downloading', progress=0)
     if is_app_owned(app_id, app_version):
-        update_download(row.id, status='completed', error=CLEAR_ERROR, progress=100)
+        update_download(row.id, status='completed', error=CLEAR_ERROR,
+                        note=CLEAR_NOTE, progress=100)
         return True
     target = rebuild_target_from_download(row)
     return download_target_ghosteshop(target, settings, existing_row=row,
@@ -1069,10 +1084,12 @@ def retry_download(download_id, settings):
     if not d:
         return False, 'Download not found'
     if is_app_owned(d.app_id, d.app_version):
-        update_download(d.id, status='completed', error=CLEAR_ERROR, progress=100)
+        update_download(d.id, status='completed', error=CLEAR_ERROR,
+                        note=CLEAR_NOTE, progress=100)
         return True, 'Already owned'
     if (d.source or SOURCE_TORRENTS) == SOURCE_GHOSTESHOP:
-        update_download(d.id, status='queued', progress=0, error=CLEAR_ERROR)
+        update_download(d.id, status='queued', progress=0, error=CLEAR_ERROR,
+                        note=CLEAR_NOTE)
         import tasks as tasks_mod
         tasks_mod.enqueue_task(GHOSTESHOP_DOWNLOAD_TASK, {
             'app_id': d.app_id, 'app_version': str(d.app_version),

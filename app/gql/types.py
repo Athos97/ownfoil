@@ -227,6 +227,12 @@ class Download:
     status: DownloadStatus = desc("Where the download stands.")
     error: Optional[str] = desc("Why it failed, when it did. Null otherwise.",
                                 default=None)
+    note: Optional[str] = desc(
+        "Explains a non-failure outcome worth knowing about - e.g. the source "
+        "resolved the target without transferring anything (already owned, or "
+        "the catalog's best is older than what's owned), or landed something "
+        "short of the newest version known elsewhere. Null for a plain, fully "
+        "up-to-date completion.", default=None)
     created_at: Optional[str] = desc("When the target was first handed to a source, "
                                      "ISO 8601.", default=None)
     updated_at: Optional[str] = desc("When the row last changed status, ISO 8601.",

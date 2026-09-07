@@ -1231,7 +1231,7 @@ def resolve_downloads(*, status: Optional[DownloadStatus], limit: int,
     rows = db.session.execute(text(f"""
     SELECT id, title_id, app_id, app_version, app_type, name, search_query,
            torrent_hash, torrent_name, indexer, size, seeders, source, progress,
-           status, error, created_at, updated_at
+           status, error, note, created_at, updated_at
     FROM downloads{where}
     ORDER BY created_at DESC, id DESC
     LIMIT :limit
@@ -1263,6 +1263,7 @@ def resolve_downloads(*, status: Optional[DownloadStatus], limit: int,
             progress=r.progress,
             status=DownloadStatus(r.status or 'queued'),
             error=r.error,
+            note=r.note,
             created_at=_iso(r.created_at),
             updated_at=_iso(r.updated_at),
         ))
