@@ -1277,12 +1277,24 @@ def resolve_missing_targets(ctx: GraphQLContext, info) -> List[MissingTarget]:
         return []
     import downloader as downloader_lib
     from constants import APP_TYPE_DLC
+    from db import get_download_by_app
     type_map = {'BASE': AppType.BASE, 'UPDATE': AppType.UPDATE, 'DLC': AppType.DLC}
     out = []
     for t in downloader_lib.get_missing_targets():
         try:
             app_type = type_map[t.get('app_type')]
         except KeyError:
+            continue
+        # get_missing_targets() always targets titledb's newest known version, which
+        # a source can complete without ever fetching it exactly (its own catalog's
+        # best available may be older and already owned - see
+        # download_target_ghosteshop's is_app_owned/get_max_owned_version checks).
+        # That leaves a 'completed' row under this exact (app_id, version); without
+        # this check it would list here forever even though nothing is actually
+        # pending - prepare_ghosteshop_targets already skips it for the same reason,
+        # this just keeps the display honest about it.
+        row = get_download_by_app(t.get('app_id'), str(t.get('app_version')))
+        if row is not None and row.status == 'completed':
             continue
         out.append(MissingTarget(
             title_id=t.get('title_id') or "",

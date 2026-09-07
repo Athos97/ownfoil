@@ -362,4 +362,34 @@ def test_catalog_best_already_owned_completes_without_downloading(
     assert row.status == 'completed'
     assert 'already owned' in row.error
     assert list(tmp_path.rglob('*.nsz')) == [], "nothing re-downloaded"
+
+
+def test_catalog_best_older_than_owned_completes_without_downloading(
+        library, portal, tmp_path, monkeypatch):
+    """The catalog's best can be strictly older than a version already owned, not
+    just a non-exact match of it (the case above): titledb's target moved on, but
+    the catalog hasn't caught up yet. Fetching it would waste bandwidth/disk on
+    content that adds nothing over what's already in the library."""
+    from db import Titles as TitlesRow, Apps as AppsRow
+    monkeypatch.setattr(downloader_lib.titles_lib, 'get_game_info',
+                        lambda tid: {'name': 'Zelda BOTW'})
+    settings = settings_with(str(tmp_path), ghost_settings(portal))
+    title = TitlesRow(title_id=ZELDA_TID, have_base=True)
+    db.session.add(title); db.session.flush()
+    # The catalog's only entry for this app_id is v1114112 (see mock CATALOG) -
+    # own something newer than that.
+    db.session.add(AppsRow(title_id=title.id, app_id=ZELDA_UPD_TID,
+                           app_version='2000000', app_type='UPDATE', owned=True))
+    db.session.commit()
+
+    target = {'title_id': ZELDA_TID, 'app_id': ZELDA_UPD_TID,
+              'app_version': '9999999', 'app_type': 'UPDATE',
+              'name': 'Zelda BOTW', 'patch_level': 152}
+    ok = downloader_lib.download_target_ghosteshop(target, settings)
+
+    assert ok
+    row = Download.query.filter_by(app_id=ZELDA_UPD_TID).one()
+    assert row.status == 'completed'
+    assert 'newer' in row.error
+    assert list(tmp_path.rglob('*.nsz')) == [], "nothing downloaded - already have something newer"
     assert list(tmp_path.rglob('*.part')) == []

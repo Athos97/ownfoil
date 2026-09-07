@@ -893,6 +893,19 @@ def is_app_id_owned(app_id):
         Apps.id).filter(Apps.app_id == app_id, Apps.owned.is_(True)).first() is not None
 
 
+def get_max_owned_version(app_id):
+    """Highest app_version owned for this app_id (as an int), or None if none owned.
+
+    app_version is stored as text, so the max has to be taken in Python -
+    lexicographic comparison would order '65536' ahead of '131072'."""
+    if not app_id:
+        return None
+    rows = db.session.query(Apps.app_version).filter(
+        Apps.app_id == app_id, Apps.owned.is_(True)).all()
+    versions = [int(v) for (v,) in rows if v is not None]
+    return max(versions) if versions else None
+
+
 def complete_downloads_for_apps(app_versions):
     """Flip download rows to completed for content the library just identified.
 

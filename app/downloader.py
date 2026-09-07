@@ -487,6 +487,19 @@ def download_target_ghosteshop(target, settings, existing_row=None, task_id=None
             logger.info(f"[ghosteshop] {target.get('app_id')}: catalog best "
                         f"v{entry.version} already owned - nothing to do.")
             return True
+        # is_app_owned above only catches an exact version match; the catalog's
+        # best can also be older than a version already owned (titledb's target
+        # moved on, but the catalog hasn't caught up yet) - fetching it would
+        # just waste bandwidth/disk on content that adds nothing.
+        max_owned = get_max_owned_version(target.get('app_id'))
+        if max_owned is not None and max_owned >= int(entry_ver):
+            row = add_download(**common, status='downloading', progress=0)
+            update_download(row.id, torrent_name=entry.name, indexer='Ghost eShop',
+                            size=entry.size, status='completed', progress=100,
+                            error=f'Catalog best is v{entry.version}; already have a newer v{max_owned}')
+            logger.info(f"[ghosteshop] {target.get('app_id')}: catalog best "
+                        f"v{entry.version} is older than owned v{max_owned} - nothing to do.")
+            return True
         logger.info(f"[ghosteshop] {target.get('app_id')}: requested v{requested_ver} "
                     f"not in catalog, fetching best available v{entry.version}.")
 

@@ -55,6 +55,28 @@ def test_missing_targets_lists_latest_unowned(library, monkeypatch):
     assert items[0]['patchLevel'] == 3
 
 
+def test_missing_targets_excludes_already_completed_rows(library, monkeypatch):
+    """get_missing_targets() always targets titledb's newest known version, which a
+    source can resolve without ever fetching it exactly (e.g. the catalog's best is
+    older and already owned) - leaving a 'completed' row under that same (app_id,
+    version). The list must not keep showing it as pending forever just because
+    that exact version was never literally downloaded (the live incident: 31
+    already-resolved titles never left the Pending & in flight table)."""
+    monkeypatch.setattr(downloader_lib, 'get_missing_targets', lambda: [{
+        'title_id': '0100ABCDEFDEF000', 'app_id': '0100ABCDEFDEF800',
+        'app_version': '196608', 'app_type': 'UPDATE',
+        'name': 'Some Game', 'patch_level': 3,
+    }])
+    db.session.add(Download(title_id='0100ABCDEFDEF000', app_id='0100ABCDEFDEF800',
+                            app_version='196608', app_type='UPDATE', name='Some Game',
+                            source='ghosteshop', status='completed', progress=100,
+                            error='Catalog best is v131072; already owned'))
+    db.session.commit()
+
+    body = run(library, 'query { missingTargets { appId } }')
+    assert body['data']['missingTargets'] == []
+
+
 def test_downloader_status_reports_both_sources(library, monkeypatch):
     import datetime
     from tasks import update_scheduled_task
