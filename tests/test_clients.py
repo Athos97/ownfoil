@@ -309,13 +309,19 @@ def test_the_disabled_check_is_not_about_credentials(shop, client):
 @pytest.mark.parametrize("name,attempted_user", [
     ("unknown-user", fixture.UNKNOWN_USER),
     ("wrong-password", "shopper"),
+    # No credentials at all, against a private shop, is refused exactly the same as
+    # a wrong password - verify_shop_access has nothing to let it through on - so it
+    # is a failed login too, not a connection. Only a *public* shop's credential-less
+    # requests are a legitimate visit (see test_normal_visits_still_log_as_connected).
+    ("private-no-credentials", None),
 ])
-def test_rejected_credentials_log_as_a_failed_login_not_a_connection(
+def test_rejected_or_missing_credentials_log_as_a_failed_login_not_a_connection(
         shop, client, name, attempted_user):
-    """Credentials that were actually presented and rejected must show up on Activity
-    as a failure, not as a plain 'Connected' - the live incident: a mistyped Tinfoil
-    password (or username) read identically to a normal, successful shop visit, with
-    no indication anything had gone wrong."""
+    """Anything short of a real successful auth must show up on Activity as a
+    failure, not as a plain 'Connected' - the live incident: a mistyped Tinfoil
+    password, and separately a client that never even sent one, both read
+    identically to a normal, successful shop visit, with no indication anything
+    had gone wrong and no way to tell who (if anyone) had tried."""
     activity_mod._connect_registry.clear()
     activity_mod._authfail_registry.clear()
     with shop.app.app_context():
@@ -328,12 +334,11 @@ def test_rejected_credentials_log_as_a_failed_login_not_a_connection(
 
 
 @pytest.mark.parametrize("client", RECORDED)
-@pytest.mark.parametrize("name", ["public-browse", "authenticated-browse",
-                                  "private-no-credentials"])
+@pytest.mark.parametrize("name", ["public-browse", "authenticated-browse"])
 def test_normal_visits_still_log_as_connected(shop, client, name):
-    """A real success, and a credential-less probe (a public shop, or a client that
-    hasn't been given credentials yet), are unaffected - only a rejected credential
-    changes what gets logged."""
+    """A real success, and a credential-less request against a *public* shop, are
+    unaffected - only a rejected or missing credential against a shop that actually
+    requires one changes what gets logged."""
     activity_mod._connect_registry.clear()
     activity_mod._authfail_registry.clear()
     with shop.app.app_context():

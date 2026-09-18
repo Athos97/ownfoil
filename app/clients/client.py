@@ -71,13 +71,20 @@ class BaseClient(ABC):
             # Audit the visit (throttled per user/device inside), now that both auth
             # stages have run. Credentials that were actually presented and rejected -
             # or that passed Basic Auth but failed Hauth host verification - are a real
-            # failed login and must show as one, not as a plain 'Connected' (the live
-            # incident this fixes). A credential-less request (a public shop, or a
-            # client probing before it has credentials configured) is still a normal
-            # connect, exactly as before.
-            if request.authorization is not None and not request.basic_auth_success:
+            # failed login and must show as one, not as a plain 'Connected'. On a shop
+            # that requires authentication, a request carrying no credentials at all is
+            # refused just the same (verify_shop_access below has nothing to let it
+            # through on), so it is a failure too, not a connection - only a *public*
+            # shop's credential-less requests are a legitimate, successful visit. This
+            # is the second half of the live incident this fixes: a client that never
+            # got as far as sending a password still showed as "Connected".
+            shop_public = bool(self.app_settings.get('shop', {}).get('public'))
+            no_creds_but_required = not shop_public and request.authorization is None
+            if not request.basic_auth_success and (
+                    request.authorization is not None or no_creds_but_required):
                 activity.record_shop_auth_failed(
-                    request, self.CLIENT_NAME, request.authorization.username,
+                    request, self.CLIENT_NAME,
+                    request.authorization.username if request.authorization else None,
                     request.basic_auth_error)
             elif request.basic_auth_success and not request.client_auth_success:
                 activity.record_shop_auth_failed(
