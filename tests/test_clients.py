@@ -17,13 +17,14 @@ from collections import namedtuple
 
 import pytest
 
+import activity as activity_mod
 import fixture
 import scenarios
 from clients.cyberfoil import CyberFoilClient
 from clients.sphaira import SphairaClient
 from clients.tinfoil import TinfoilClient
 from constants import APP_TYPE_BASE, APP_TYPE_DLC, APP_TYPE_UPD
-from db import Files
+from db import ActivityEvent, Files
 from settings import get_settings, set_shop_settings
 
 CAPTURES = os.path.join(os.path.dirname(__file__), "captures")
@@ -300,6 +301,46 @@ def test_the_disabled_check_is_not_about_credentials(shop, client):
                        settings={"clients": {client: {"enabled": True}}})
     assert response.status_code == 200
     assert not is_error(response)
+
+
+# ==================== Activity: a bad login must not read as a connection ====================
+
+@pytest.mark.parametrize("client", RECORDED)
+@pytest.mark.parametrize("name,attempted_user", [
+    ("unknown-user", fixture.UNKNOWN_USER),
+    ("wrong-password", "shopper"),
+])
+def test_rejected_credentials_log_as_a_failed_login_not_a_connection(
+        shop, client, name, attempted_user):
+    """Credentials that were actually presented and rejected must show up on Activity
+    as a failure, not as a plain 'Connected' - the live incident: a mistyped Tinfoil
+    password (or username) read identically to a normal, successful shop visit, with
+    no indication anything had gone wrong."""
+    activity_mod._connect_registry.clear()
+    activity_mod._authfail_registry.clear()
+    with shop.app.app_context():
+        play(shop, client, name)
+        events = ActivityEvent.query.all()
+        assert len(events) == 1
+        assert events[0].kind == 'login_failed'
+        assert events[0].username == attempted_user
+        assert events[0].client == client
+
+
+@pytest.mark.parametrize("client", RECORDED)
+@pytest.mark.parametrize("name", ["public-browse", "authenticated-browse",
+                                  "private-no-credentials"])
+def test_normal_visits_still_log_as_connected(shop, client, name):
+    """A real success, and a credential-less probe (a public shop, or a client that
+    hasn't been given credentials yet), are unaffected - only a rejected credential
+    changes what gets logged."""
+    activity_mod._connect_registry.clear()
+    activity_mod._authfail_registry.clear()
+    with shop.app.app_context():
+        play(shop, client, name)
+        events = ActivityEvent.query.all()
+        assert len(events) == 1
+        assert events[0].kind == 'shop_connect'
 
 
 # ==================== Shop contents ====================

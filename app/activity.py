@@ -17,20 +17,33 @@ from utils import client_address
 logger = logging.getLogger('main')
 
 # One connect event per (user, device, client) per window: a client refresh walks
-# several endpoints in a burst, which is one visit, not five.
+# several endpoints in a burst, which is one visit, not five. Failed shop logins get
+# their own registry - sharing one with successes would let a failed attempt's
+# throttle window swallow the successful retry that follows it (basic_auth() still
+# resolves request.user for a *known* username with the *wrong* password, so the
+# two events would otherwise collide on the same (username, device, client) key).
 CONNECT_THROTTLE_SECONDS = 60
 _connect_registry: dict = {}
+_authfail_registry: dict = {}
 _connect_lock = __import__('threading').Lock()
 
 
-def _throttled_connect(key):
+def _throttled(registry, key):
     now = time.monotonic()
     with _connect_lock:
-        last = _connect_registry.get(key)
+        last = registry.get(key)
         if last is None or (now - last) >= CONNECT_THROTTLE_SECONDS:
-            _connect_registry[key] = now
+            registry[key] = now
             return True
         return False
+
+
+def _throttled_connect(key):
+    return _throttled(_connect_registry, key)
+
+
+def _throttled_authfail(key):
+    return _throttled(_authfail_registry, key)
 
 
 def _safe_record(**kwargs):
@@ -58,6 +71,27 @@ def record_shop_connect(request: Request, client_name, username=None, device_uid
         client=(client_name or '').lower() or None,
         device_uid=device_uid,
         ip=client_address(request) if request else None,
+    )
+
+
+def record_shop_auth_failed(request: Request, client_name, attempted_username=None, detail=None):
+    """A shop client's Basic Auth (or, once past that, its Hauth host check) was
+    rejected. Without this, a bad Tinfoil/CyberFoil password showed up on Activity
+    identically to a normal visit - 'Connected', no error, no way to tell the two
+    apart (the live incident: a mistyped username read as a successful connection
+    until the real one arrived). Throttled per (username, device, client) like
+    record_shop_connect, but through its own registry - see the note above."""
+    device_uid = request.headers.get('Uid') if request else None
+    key = (attempted_username, device_uid, (client_name or '').lower())
+    if not _throttled_authfail(key):
+        return
+    _safe_record(
+        kind='login_failed',
+        username=attempted_username,
+        client=(client_name or '').lower() or None,
+        device_uid=device_uid,
+        ip=client_address(request) if request else None,
+        detail=detail,
     )
 
 

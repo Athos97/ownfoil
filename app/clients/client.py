@@ -58,10 +58,6 @@ class BaseClient(ABC):
             else:
                 self.log_warning(f"Authentication failed: {request.basic_auth_error}")
 
-            # Audit the visit (throttled per user/device inside) - after basic auth
-            # so the event carries who it was.
-            activity.record_shop_connect(request, self.CLIENT_NAME)
-
             # Client-specific authentication
             request.client_auth_success, request.client_auth_error, client_auth_data = self._client_authenticate(request)
             if request.client_auth_success:
@@ -71,6 +67,24 @@ class BaseClient(ABC):
 
             else:
                 self.log_warning(f"Client-specific auth failed: {request.client_auth_error}")
+
+            # Audit the visit (throttled per user/device inside), now that both auth
+            # stages have run. Credentials that were actually presented and rejected -
+            # or that passed Basic Auth but failed Hauth host verification - are a real
+            # failed login and must show as one, not as a plain 'Connected' (the live
+            # incident this fixes). A credential-less request (a public shop, or a
+            # client probing before it has credentials configured) is still a normal
+            # connect, exactly as before.
+            if request.authorization is not None and not request.basic_auth_success:
+                activity.record_shop_auth_failed(
+                    request, self.CLIENT_NAME, request.authorization.username,
+                    request.basic_auth_error)
+            elif request.basic_auth_success and not request.client_auth_success:
+                activity.record_shop_auth_failed(
+                    request, self.CLIENT_NAME, request.user.user if request.user else None,
+                    request.client_auth_error)
+            else:
+                activity.record_shop_connect(request, self.CLIENT_NAME)
 
             # Call the actual handler
             return handler(self, request)

@@ -22,6 +22,7 @@ def web(tmp_path, monkeypatch):
     init_db(app)
     # No admin account -> auth disabled -> the admin gate opens for the test client.
     activity_mod._connect_registry.clear()
+    activity_mod._authfail_registry.clear()
     with app.app_context():
         yield app
 
@@ -147,3 +148,31 @@ def test_connect_throttle_one_event_per_window(web):
 def test_download_not_counted_is_not_recorded(web):
     activity_mod.record_download(FakeRequest(), '/games/x.nsp', size=1, counted=False)
     assert ActivityEvent.query.count() == 0
+
+
+# --- shop auth-failure throttle ---
+
+def test_authfail_throttle_one_event_per_window(web):
+    req = FakeRequest(uid='UID-1')
+    activity_mod.record_shop_auth_failed(req, 'Tinfoil', attempted_username='ghost')
+    activity_mod.record_shop_auth_failed(req, 'Tinfoil', attempted_username='ghost')
+    activity_mod.record_shop_auth_failed(req, 'Tinfoil', attempted_username='ghost')
+    req2 = FakeRequest(uid='UID-2')
+    activity_mod.record_shop_auth_failed(req2, 'Tinfoil', attempted_username='ghost')
+
+    events = ActivityEvent.query.all()
+    assert len(events) == 2, "one event per (username, device) per window"
+    assert all(e.kind == 'login_failed' for e in events)
+
+
+def test_a_failure_does_not_throttle_the_success_that_follows_it(web):
+    """basic_auth() still resolves the real user for a known username with the wrong
+    password, so a failed and a successful attempt can share the exact same
+    (username, device, client) key. They must not share a throttle window, or the
+    successful retry right after a typo would silently vanish from Activity."""
+    req = FakeRequest(user=type('U', (), {'user': 'bob'})(), uid='UID-1')
+    activity_mod.record_shop_auth_failed(req, 'Tinfoil', attempted_username='bob')
+    activity_mod.record_shop_connect(req, 'Tinfoil')
+
+    events = ActivityEvent.query.order_by(ActivityEvent.id).all()
+    assert [e.kind for e in events] == ['login_failed', 'shop_connect']
